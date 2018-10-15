@@ -15,7 +15,7 @@
 
 from operator import attrgetter
 
-from ryu.app import simple_switch_13
+from switch_v6 import SimpleSwitch13
 from ryu.controller import ofp_event
 from ryu.controller.handler import MAIN_DISPATCHER, DEAD_DISPATCHER
 from ryu.controller.handler import set_ev_cls
@@ -28,12 +28,13 @@ from ryu.lib import hub
 # every 30 seconds.
 # The RouterAdvertisement is build using scapy
 
-class SimpleV6nd13(simple_switch_13.SimpleSwitch13):
+class SimpleV6nd13(SimpleSwitch13):
 
     def __init__(self, *args, **kwargs):
         super(SimpleV6nd13, self).__init__(*args, **kwargs)
         self.datapaths = {}
         self.ra_thread = hub.spawn(self._cyclic_ra)
+        print('spawned')
 
     @set_ev_cls(ofp_event.EventOFPStateChange,
                 [MAIN_DISPATCHER, DEAD_DISPATCHER])
@@ -52,13 +53,12 @@ class SimpleV6nd13(simple_switch_13.SimpleSwitch13):
         while True:
             for dp in self.datapaths.values():
                 self._send_ra(dp)
-            hub.sleep(30)
+            hub.sleep(5)
 
     def _send_ra(self, datapath):
-        self.logger.info('send IPv6_RA on Datapath: %016x', datapath.id)
+        self.logger.info('sent IPv6_RA on Datapath: %016x', datapath.id)
         ofproto = datapath.ofproto
         parser = datapath.ofproto_parser
-        
         e = scapy.Ether (src="70:01:02:03:04:05", dst="33:33:00:00:00:01")
         h = scapy.IPv6()
         h.dest = "ff02::1"

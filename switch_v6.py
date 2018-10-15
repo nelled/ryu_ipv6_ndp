@@ -13,6 +13,21 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+####################################
+#####>>>>TODO<<<<###################
+# Neigbor discovery cache
+# # Problem: We need to probe for activity, once a neighbor is known the traffic wont go over the controller again
+# Write handlers for different packet types, plus fallback if different packet is matched
+# # Handlers can print messages first, just for structure.
+# Find out what exactly should be done with the router advertisements
+# Find out, how to test ipv6 functionality (friendly tests)
+# Write wrappers for scapy for convenient answer generation.
+
+
+
+
+###################################
+
 from ryu.base import app_manager
 from ryu.controller import ofp_event
 from ryu.controller.handler import CONFIG_DISPATCHER, MAIN_DISPATCHER
@@ -49,13 +64,17 @@ class SimpleSwitch13(app_manager.RyuApp):
         self.add_flow(datapath, 0, match, actions)
         # install match for IPv6 Multicast-Adresses
         # all 33:33:ff:xx:xx:xx packets are send to the controller for inspection
-        match = parser.OFPMatch(eth_type=0x86dd, eth_dst=('33:33:ff:00:00:00','ff:ff:ff:00:00:00'))
+        #match = parser.OFPMatch(eth_type=0x86dd, eth_dst=('33:33:ff:00:00:00','ff:ff:ff:00:00:00'))
+        matches = [parser.OFPMatch(eth_type=0x86dd, ip_proto=58, icmpv6_type=icmp_code) for icmp_code in range(133, 137+1, 1)]
         actions = [parser.OFPActionOutput(ofproto.OFPP_CONTROLLER,
                                           ofproto.OFPCML_NO_BUFFER)]
-        self.add_flow(datapath, 10, match, actions, cookie=999)
+        #self.add_flow(datapath, 10, match, actions, cookie=888)
+        for m in matches:
+            self.add_flow(datapath, 10, m, actions, cookie=999)
 
 
     def add_flow(self, datapath, priority, match, actions, buffer_id=None, cookie=0):
+        print("Added flow for: " + str(match))
         ofproto = datapath.ofproto
         parser = datapath.ofproto_parser
 
@@ -96,11 +115,11 @@ class SimpleSwitch13(app_manager.RyuApp):
         self.mac_to_port.setdefault(dpid, {})
 
         if msg.reason == ofproto.OFPR_NO_MATCH:
-	    reason = "NO MATCH"
+            reason = "NO MATCH"
         else:
-	    reason = "UNKNOWN"
-
-        self.logger.info("packet in %s %s %s %s"" reason=%s match=%s cookie=%d", dpid, src, dst, in_port, reason, msg.match, msg.cookie)
+            reason = "UNKNOWN"
+        #print("A packet in: %s %s %s %s reason=%s match=%s cookie=%d", dpid, src, dst, in_port, reason, msg.match, msg.cookie)
+        self.logger.info("A packet in: %s %s %s %s reason=%s match=%s cookie=%d", dpid, src, dst, in_port, reason, msg.match, msg.cookie)
 
         # learn a mac address to avoid FLOOD next time.
         self.mac_to_port[dpid][src] = in_port
