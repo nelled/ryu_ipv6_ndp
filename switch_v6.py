@@ -28,14 +28,13 @@
 
 
 ###################################
-
+from scapy import all as scapy
 from ryu.base import app_manager
 from ryu.controller import ofp_event
 from ryu.controller.handler import CONFIG_DISPATCHER, MAIN_DISPATCHER, DEAD_DISPATCHER
 from ryu.controller.handler import set_ev_cls
-from ryu.lib.packet import ether_types, ethernet, icmpv6, packet, ipv6
+from ryu.lib.packet import ether_types, ethernet, packet, ipv6
 from ryu.ofproto import ofproto_v1_3
-from ryu.lib import hub
 
 from nc.neighbor_cache import NeighborCache
 
@@ -119,7 +118,6 @@ class SimpleSwitch13(app_manager.RyuApp):
         msg = ev.msg
         datapath = msg.datapath
         ofproto = datapath.ofproto
-        parser = datapath.ofproto_parser
         in_port = msg.match['in_port']
 
         pkt = packet.Packet(msg.data)
@@ -128,6 +126,7 @@ class SimpleSwitch13(app_manager.RyuApp):
         if eth.ethertype == ether_types.ETH_TYPE_LLDP:
             # ignore lldp packet
             return
+
         dst = eth.dst
         src = eth.src
 
@@ -140,11 +139,17 @@ class SimpleSwitch13(app_manager.RyuApp):
             reason = msg.reason
 
         if msg.cookie in ICMPv6_CODES.keys():
-            self._ndp_packet_handler(dpid, src, dst, in_port, reason, msg.match, msg.cookie, eth.ethertype, pkt)
+            self._ndp_packet_handler(dpid, src, dst, in_port, msg.cookie, msg)
         else:
             self.logger.info("Another Message: %s %s %s %s reason=%s match=%s cookie=%d ether=%d", dpid, src, dst,
                              in_port, reason, msg.match, msg.cookie, eth.ethertype)
+            self._learn_mac_send(dpid, src, dst, in_port, msg)
 
+    # Normal behaviour outsourced to function so we can control what happens to ICMPv6 packets
+    def _learn_mac_send(self, dpid, src, dst, in_port, msg):
+        datapath = self.datapaths[dpid]
+        ofproto = datapath.ofproto
+        parser = datapath.ofproto_parser
         # learn a mac address to avoid FLOOD next time.
         self.mac_to_port[dpid][src] = in_port
 
@@ -173,33 +178,70 @@ class SimpleSwitch13(app_manager.RyuApp):
                                   in_port=in_port, actions=actions, data=data)
         datapath.send_msg(out)
 
-    def _ndp_packet_handler(self, dpid, src, dst, in_port, reason, match, cookie, ethertype, pkt):
+    def _ndp_packet_handler(self, dpid, src, dst, in_port, cookie, msg):
+        if cookie == 133:
+            self._rs_handler(dpid, src, dst, in_port, cookie, msg)
+
+        if cookie == 134:
+            self._ra_handler(dpid, src, dst, in_port, cookie, msg)
+
         if cookie == 135:
-            self._ns_handler(dpid, src, dst, in_port, reason, match, cookie, ethertype, pkt)
+            self._ns_handler(dpid, src, dst, in_port, cookie, msg)
 
         if cookie == 136:
-            self._na_handler(dpid, src, dst, in_port, reason, match, cookie, ethertype, pkt)
+            self._na_handler(dpid, src, dst, in_port, cookie, msg)
 
-    def _ra_handler(self):
+        if cookie == 137:
+            self._rm_handler(dpid, src, dst, in_port, cookie, msg)
+
+    def _rs_handler(self, dpid, src, dst, in_port, cookie, msg):
+        # Respond with router advertisement immediately
+        # Send to all or only to node asking?
+        # Send to port or flood?
+        self.logger.info(ICMPv6_CODES[cookie] + ": %s %s %s %s cookie=%d", dpid, src, dst, in_port, cookie)
+        self._send_ra_s(dpid, src)
+
+    def _ra_handler(self, dpid, src, dst, in_port, cookie, msg):
         # Do nothing, controller is the only one emitting advertisements.
         # Probably log and do not forward
-        pass
+        self.logger.info(ICMPv6_CODES[cookie] + ": %s %s %s %s cookie=%d", dpid, src, dst, in_port, cookie)
 
-    def _rs_handler(self):
-        # Respond with router advertisement immediately
-        pass
-
-    def _na_handler(self, dpid, src, dst, in_port, reason, match, cookie, ethertype, pkt):
-        print("NA handler invoked")
-        self.logger.info(ICMPv6_CODES[cookie] + ": %s %s %s %s reason=%s match=%s cookie=%d ether=%d",
-                         dpid, src, dst, in_port, reason,
-                         match, cookie, ethertype)
+    def _ns_handler(self, dpid, src, dst, in_port, cookie, msg):
+        self.logger.info(ICMPv6_CODES[cookie] + ": %s %s %s %s cookie=%d", dpid, src, dst, in_port, cookie)
+        self._learn_mac_send(dpid, src, dst, in_port, msg)
+        
+    def _na_handler(self, dpid, src, dst, in_port, cookie, msg):
+        self.logger.info(ICMPv6_CODES[cookie] + ": %s %s %s %s cookie=%d", dpid, src, dst, in_port, cookie)
+        pkt = packet.Packet(msg.data)
         ip6_header = pkt.get_protocol(ipv6.ipv6)
         self.neighbor_cache.add_entry(ip6_header.src, src)
         print(self.neighbor_cache)
+        self._learn_mac_send(dpid, src, dst, in_port, msg)
 
-    def _ns_handler(self, dpid, src, dst, in_port, reason, match, cookie, ethertype, pkt):
-        print("NS handler invoked")
-        self.logger.info(ICMPv6_CODES[cookie] + ": %s %s %s %s reason=%s match=%s cookie=%d ether=%d",
-                         dpid, src, dst, in_port, reason,
-                         match, cookie, ethertype)
+    def _rm_handler(self, dpid, src, dst, in_port, cookie, msg):
+        self.logger.info(ICMPv6_CODES[cookie] + ": %s %s %s %s cookie=%d", dpid, src, dst, in_port, cookie)
+
+    def _send_ra_s(self, dpid, dst):
+        self.logger.info('Sent sol RA on dp: %016x to %s', dpid, dst)
+        datapath = self.datapaths[dpid]
+        ofproto = datapath.ofproto
+        parser = datapath.ofproto_parser
+        e = scapy.Ether(src="70:01:02:03:04:05", dst=dst)
+        h = scapy.IPv6()
+        h.dest = "ff02::1"
+        i = scapy.ICMPv6ND_RA()
+        o = scapy.ICMPv6NDOptPrefixInfo()
+        o.prefix = "2001:db8:1::"
+        o.prefixlen = 64
+        p = (e / h / i / o)
+        ps = bytes(p)
+        if dst in self.mac_to_port[dpid]:
+            out_port = self.mac_to_port[dpid][dst]
+        else:
+            out_port = ofproto.OFPP_FLOOD
+
+        actions = [parser.OFPActionOutput(out_port)]
+        out = parser.OFPPacketOut(datapath=datapath,
+                                  buffer_id=ofproto.OFP_NO_BUFFER,
+                                  in_port=ofproto.OFPP_CONTROLLER, actions=actions, data=ps)
+        datapath.send_msg(out)

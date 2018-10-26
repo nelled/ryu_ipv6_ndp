@@ -33,7 +33,6 @@ class CacheManager(SimpleSwitch13):
     def _cache_check(self):
         while True:
             self._check_entries()
-            print("Cache:")
             print(self.neighbor_cache)
             hub.sleep(5)
 
@@ -90,7 +89,7 @@ class CacheManager(SimpleSwitch13):
         llSrcAdd = scapy.ICMPv6NDOptSrcLLAddr(lladdr=CONTROLLER_NC_SOURCE)
 
         sol = (ether_head / ipv6_head / icmpv6_ns / icmpv6_opt_pref/ llSrcAdd)
-        print(sol.show())
+        #print(sol.show())
 
         return sol
 

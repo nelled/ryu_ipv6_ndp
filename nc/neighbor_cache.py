@@ -13,4 +13,4 @@ class NeighborCache:
     def __str__(self):
         headers = ['IP', 'MAC', 'State', 'Age']
         data = [[v.ip, v.mac, v.state, v.get_age()] for k, v in self.entries.items()]
-        return tabulate(data, headers=headers)
+        return tabulate(data, headers=headers, tablefmt='fancy_grid')
