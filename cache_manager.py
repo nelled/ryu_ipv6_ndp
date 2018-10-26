@@ -75,6 +75,7 @@ class CacheManager(SimpleSwitch13):
     # Todo: Create something like a packet factory
     # TODO: refactor functions, we do not need to pass a src here if we always use one MAC
     # TODO: Look at actions and parser in _send_ra, need todo this as well
+    # TODO: Put this in wiki, Thomas' code did not work because no ether_head and possibly no prefix info
     def _create_ns(self, dst, src):
         # Solicitation
         ether_head = scapy.Ether(src="70:01:02:03:04:05", dst="33:33:00:00:00:01")
