@@ -18,7 +18,7 @@ from scapy import all as scapy
 from ipaddress import IPv6Address
 from switch_v6 import SimpleSwitch13
 
-REACHABLE_TIME = 30
+REACHABLE_TIME = 10
 # TODO: What to do here?
 CONTROLLER_NC_SOURCE = '33:33:00:00:00:01'
 
@@ -46,9 +46,13 @@ class CacheManager(SimpleSwitch13):
                 v.set_reachable()
             if age > REACHABLE_TIME:
                 v.set_stale()
-            if age > 1.2 * REACHABLE_TIME:
+
+            # TODO: Maybe probe counter? Should we abort after some attempts
+            # Or resend every update interval until deletion?
+            if age > 1.2 * REACHABLE_TIME
                 # Get suffix from entry
                 self._send_ns(v.ip, CONTROLLER_NC_SOURCE)
+                print('Probe sent')
                 v.set_probe()
             if age > 3 * REACHABLE_TIME:
                 v.set_delete()
@@ -73,13 +77,16 @@ class CacheManager(SimpleSwitch13):
     # TODO: Look at actions and parser in _send_ra, need todo this as well
     def _create_ns(self, dst, src):
         # Solicitation
-        head = scapy.IPv6()
-        head.dst = self._make_sn_mc(dst)
+        ether_head = scapy.Ether(src="70:01:02:03:04:05", dst="33:33:00:00:00:01")
+        ipv6_head = scapy.IPv6()
+        ipv6_head.dst = self._make_sn_mc(dst)
 
-        ns = scapy.ICMPv6ND_NS(tgt=dst)
+        icmpv6_ns = scapy.ICMPv6ND_NS(tgt=dst)
+        icmpv6_opt_pref = scapy.ICMPv6NDOptPrefixInfo()
         llSrcAdd = scapy.ICMPv6NDOptSrcLLAddr(lladdr=src)
 
-        sol = head / ns / llSrcAdd
+        sol = (ether_head / ipv6_head / icmpv6_ns / icmpv6_opt_pref/ llSrcAdd)
+        #print(sol.show())
 
         return sol
 

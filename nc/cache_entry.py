@@ -19,6 +19,9 @@ class CacheEntry:
     def get_mac(self):
         return self.mac
 
+    def get_state(self):
+        return self.state
+
     def set_reachable(self):
         self.state = 'REACHABLE'
 

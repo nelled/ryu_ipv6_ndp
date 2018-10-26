@@ -34,7 +34,8 @@ class SimpleV6nd13(CacheManager):
         while True:
             for dp in self.datapaths.values():
                 self._send_ra(dp)
-            hub.sleep(30)
+                print("RA sent")
+            hub.sleep(5)
 
     def _send_ra(self, datapath):
         self.logger.info('sent IPv6_RA on Datapath: %016x', datapath.id)
