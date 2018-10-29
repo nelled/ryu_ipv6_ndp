@@ -168,6 +168,10 @@ class SimpleSwitch13(app_manager.RyuApp):
         # install a flow to avoid packet_in next time
         if out_port != ofproto.OFPP_FLOOD:
             match = parser.OFPMatch(in_port=in_port, eth_dst=dst, eth_src=src)
+            # If we do not forward the packet (because we send our own NS back i.e.)
+            if forward_packet == False:
+                self.add_flow(datapath, 1, match, actions)
+                return
             # verify if we have a valid buffer_id, if yes avoid to send both
             # flow_mod & packet_out
             if msg.buffer_id != ofproto.OFP_NO_BUFFER:
@@ -213,18 +217,21 @@ class SimpleSwitch13(app_manager.RyuApp):
 
     def _ns_handler(self, dpid, src, dst, in_port, cookie, msg):
         self.logger.info(ICMPv6_CODES[cookie] + ": %s %s %s %s cookie=%d", dpid, src, dst, in_port, cookie)
-        # TODO: Leanrn mac and install flow rule, forward packet or not? add flag to learn_send
-        # routine which installs flow mod but does not forward packet or just forward it?
-        # Refactor learn_send routine to add flow logic is in separate function??
-        #self._learn_mac(dpid, src, in_port)
-        cache_entry = self._addr_in_cache(dst)
+        pkt = packet.Packet(msg.data)
+        ipv6_header = pkt.get_protocol(ipv6.ipv6)
+        ipv6_dst = ipv6_header.dst
+        self.logger.info("Handling NS, DST IS: %s", ipv6_dst)
+        cache_entry = self._addr_in_cache(ipv6_dst)
         if cache_entry:
-            pkt = packet.Packet(msg.data)
-            ipv6_header = pkt.get_protocol(ipv6.ipv6)
+            self.logger.info("Cache hit, responding with our own NA.")
+            self._learn_mac_send(dpid, src, dst, in_port, msg, forward_packet=False)
+
             na = self._create_na(ipv6_header.src, ipv6_header.dst, src, dst)
             self._send_packet(na, dpid)
         else:
-            self._learn_mac_send(dpid, src, dst, in_port, msg)
+            # TODO: Implement logic as in email
+            self.logger.info("Cache miss, forwarding NS, we need to change this.")
+            self._learn_mac_send(dpid, src, dst, in_port, msg, forward_packet=True)
 
     def _na_handler(self, dpid, src, dst, in_port, cookie, msg):
         self.logger.info(ICMPv6_CODES[cookie] + ": %s %s %s %s cookie=%d", dpid, src, dst, in_port, cookie)

@@ -11,10 +11,7 @@ class NeighborCache:
         self.entries[ip] = CacheEntry(ip, mac)
 
     def get_entry(self, ip):
-        if self.entries[ip]:
-            return self.entries[ip]
-        else:
-            return None
+        return self.entries.get(ip, None)
 
     def __str__(self):
         headers = ['IP', 'MAC', 'State', 'Age']
