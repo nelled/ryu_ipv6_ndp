@@ -23,6 +23,9 @@ from cache_manager import CacheManager
 # it runs a separate thread that sends a IPv6 RouterAdvertisement
 # every 30 seconds.
 # The RouterAdvertisement is build using scapy
+from config import router_mac
+from helpers import mac2ipv6
+
 
 class SimpleV6nd13(CacheManager):
 
@@ -40,14 +43,16 @@ class SimpleV6nd13(CacheManager):
         self.logger.info('sent IPv6_RA on Datapath: %016x', datapath.id)
         ofproto = datapath.ofproto
         parser = datapath.ofproto_parser
-        e = scapy.Ether(src="70:01:02:03:04:05", dst="33:33:00:00:00:01")
+        e = scapy.Ether(src=router_mac, dst='33:33:00:00:00:01')
         h = scapy.IPv6()
-        h.dest = "ff02::1"
+        h.dest = 'ff02::1'
+        h.src = mac2ipv6(router_mac)
         i = scapy.ICMPv6ND_RA()
         o = scapy.ICMPv6NDOptPrefixInfo()
-        o.prefix = "2001:db8:1::"
+        o.prefix = '2001:db8:1::'
         o.prefixlen = 64
         p = (e / h / i / o)
+        print(p.show())
         ps = bytes(p)
         actions = [parser.OFPActionOutput(ofproto.OFPP_FLOOD)]
         out = parser.OFPPacketOut(datapath=datapath,

@@ -36,6 +36,8 @@ from ryu.controller.handler import set_ev_cls
 from ryu.lib.packet import ether_types, ethernet, packet, ipv6
 from ryu.ofproto import ofproto_v1_3
 
+from config import router_mac
+from helpers import mac2ipv6
 from nc.neighbor_cache import NeighborCache
 
 ICMPv6_CODES = {133: 'Router Solicitation',
@@ -145,13 +147,16 @@ class SimpleSwitch13(app_manager.RyuApp):
                              in_port, reason, msg.match, msg.cookie, eth.ethertype)
             self._learn_mac_send(dpid, src, dst, in_port, msg)
 
+    def _learn_mac(self, dpid, src, in_port):
+        self.mac_to_port[dpid][src] = in_port
+
     # Normal behaviour outsourced to function so we can control what happens to ICMPv6 packets
-    def _learn_mac_send(self, dpid, src, dst, in_port, msg):
+    def _learn_mac_send(self, dpid, src, dst, in_port, msg, forward_packet=True):
         datapath = self.datapaths[dpid]
         ofproto = datapath.ofproto
         parser = datapath.ofproto_parser
         # learn a mac address to avoid FLOOD next time.
-        self.mac_to_port[dpid][src] = in_port
+        self._learn_mac(dpid, src, in_port)
 
         if dst in self.mac_to_port[dpid]:
             out_port = self.mac_to_port[dpid][dst]
@@ -208,8 +213,19 @@ class SimpleSwitch13(app_manager.RyuApp):
 
     def _ns_handler(self, dpid, src, dst, in_port, cookie, msg):
         self.logger.info(ICMPv6_CODES[cookie] + ": %s %s %s %s cookie=%d", dpid, src, dst, in_port, cookie)
-        self._learn_mac_send(dpid, src, dst, in_port, msg)
-        
+        # TODO: Leanrn mac and install flow rule, forward packet or not? add flag to learn_send
+        # routine which installs flow mod but does not forward packet or just forward it?
+        # Refactor learn_send routine to add flow logic is in separate function??
+        #self._learn_mac(dpid, src, in_port)
+        cache_entry = self._addr_in_cache(dst)
+        if cache_entry:
+            pkt = packet.Packet(msg.data)
+            ipv6_header = pkt.get_protocol(ipv6.ipv6)
+            na = self._create_na(ipv6_header.src, ipv6_header.dst, src, dst)
+            self._send_packet(na, dpid)
+        else:
+            self._learn_mac_send(dpid, src, dst, in_port, msg)
+
     def _na_handler(self, dpid, src, dst, in_port, cookie, msg):
         self.logger.info(ICMPv6_CODES[cookie] + ": %s %s %s %s cookie=%d", dpid, src, dst, in_port, cookie)
         pkt = packet.Packet(msg.data)
@@ -221,19 +237,23 @@ class SimpleSwitch13(app_manager.RyuApp):
     def _rm_handler(self, dpid, src, dst, in_port, cookie, msg):
         self.logger.info(ICMPv6_CODES[cookie] + ": %s %s %s %s cookie=%d", dpid, src, dst, in_port, cookie)
 
+    # TODO: Implement ONE send_ra function that takes arguments
+    # like solicited true false etc
     def _send_ra_s(self, dpid, dst):
         self.logger.info('Sent sol RA on dp: %016x to %s', dpid, dst)
         datapath = self.datapaths[dpid]
         ofproto = datapath.ofproto
         parser = datapath.ofproto_parser
-        e = scapy.Ether(src="70:01:02:03:04:05", dst=dst)
+        e = scapy.Ether(src=router_mac, dst=dst)
         h = scapy.IPv6()
-        h.dest = "ff02::1"
+        h.dest = 'ff02::1'
+        h.src = mac2ipv6(router_mac)
         i = scapy.ICMPv6ND_RA()
         o = scapy.ICMPv6NDOptPrefixInfo()
-        o.prefix = "2001:db8:1::"
+        o.prefix = '2001:db8:1::'
         o.prefixlen = 64
         p = (e / h / i / o)
+        print(p.show())
         ps = bytes(p)
         if dst in self.mac_to_port[dpid]:
             out_port = self.mac_to_port[dpid][dst]
@@ -245,3 +265,38 @@ class SimpleSwitch13(app_manager.RyuApp):
                                   buffer_id=ofproto.OFP_NO_BUFFER,
                                   in_port=ofproto.OFPP_CONTROLLER, actions=actions, data=ps)
         datapath.send_msg(out)
+
+    def _addr_in_cache(self, ip):
+        return self.neighbor_cache.get_entry(ip)
+
+    def _create_na(self, src_ip, dst_ip, src_mac, dst_mac):
+        # Advertisement
+        ether_head = scapy.Ether(dst=dst_mac, src=src_mac)
+        ipv6_head = scapy.IPv6(src=src_ip, dst=dst_ip)
+        icmpv6_ns = scapy.ICMPv6ND_NA(tgt=src_ip, R='0')
+        icmpv6_opt_pref = scapy.ICMPv6NDOptPrefixInfo()
+        # Is this the address the answer will be sent to?
+        llSrcAdd = scapy.ICMPv6NDOptSrcLLAddr(lladdr=src_mac)
+
+        adv = (ether_head / ipv6_head / icmpv6_ns / icmpv6_opt_pref/ llSrcAdd)
+        print(adv.show())
+
+        return adv
+
+    def _send_packet(self, pkt, dpid):
+        datapath = self.datapaths[dpid]
+        ofproto = datapath.ofproto
+        parser = datapath.ofproto_parser
+        ps = bytes(pkt)
+        if pkt.ether.dst in self.mac_to_port[dpid]:
+            out_port = self.mac_to_port[dpid][pkt.ether.dst]
+        else:
+            out_port = ofproto.OFPP_FLOOD
+
+        actions = [parser.OFPActionOutput(out_port)]
+        out = parser.OFPPacketOut(datapath=datapath,
+                                  buffer_id=ofproto.OFP_NO_BUFFER,
+                                  in_port=ofproto.OFPP_CONTROLLER, actions=actions, data=ps)
+        datapath.send_msg(out)
+
+
