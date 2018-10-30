@@ -14,8 +14,6 @@
 # limitations under the License.
 
 from ryu.lib import hub
-from scapy import all as scapy
-from ipaddress import IPv6Address
 from switch_v6 import SimpleSwitch13
 
 REACHABLE_TIME = 10
@@ -60,41 +58,8 @@ class CacheManager(SimpleSwitch13):
         for i in to_delete:
             self.neighbor_cache.entries.pop(i, None)
 
-    # Create solicited node multicast
-    def _make_sn_mc(self, addr):
-        snmc_prefix = 'FF02:0:0:0:0:1:FF'
-        suffix = self._get_snmc_suffix(addr)
-        return snmc_prefix + suffix
-
-    def _get_snmc_suffix(self, addr):
-        ip = IPv6Address(addr).exploded
-        return ip[-7:]
-
-    # Todo: Create something like a packet factory
-    # TODO: refactor functions, we do not need to pass a src here if we always use one MAC
-    # TODO: Look at actions and parser in _send_ra, need todo this as well
-    # TODO: Put this in wiki, Thomas' code did not work because no ether_head and possibly no prefix info
-    def _create_ns(self, cache_entry):
-        print('IP:' + cache_entry.ip)
-        print('MAC:' + cache_entry.mac)
-        # Solicitation
-        ether_head = scapy.Ether(dst=cache_entry.mac)
-        ipv6_head = scapy.IPv6()
-        # Solicited node multicast
-        ipv6_head.dst = self._make_sn_mc(cache_entry.ip)
-        # Global address?
-        icmpv6_ns = scapy.ICMPv6ND_NS(tgt=cache_entry.ip)
-        icmpv6_opt_pref = scapy.ICMPv6NDOptPrefixInfo()
-        # Is this the address the answer will be sent to?
-        llSrcAdd = scapy.ICMPv6NDOptSrcLLAddr(lladdr=CONTROLLER_NC_SOURCE)
-
-        sol = (ether_head / ipv6_head / icmpv6_ns / icmpv6_opt_pref/ llSrcAdd)
-        #print(sol.show())
-
-        return sol
-
     def _send_ns(self, cache_entry):
-        pkt = self._create_ns(cache_entry)
+        pkt = self._create_ns(cache_entry.ip, cache_entry.mac)
         self._send_all(pkt)
 
     def _send_all(self, pkt):

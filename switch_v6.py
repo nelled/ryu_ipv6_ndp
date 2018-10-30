@@ -15,29 +15,25 @@
 
 ####################################
 #####>>>>TODO<<<<###################
-# Neigbor discovery cache
-# # Problem: We need to probe for activity, once a neighbor is known the traffic wont go over the controller again
-# Write handlers for different packet types, plus fallback if different packet is matched
-# # Handlers can print messages first, just for structure.
 # Normal learning has to be retained
-# Find out what exactly should be done with the router advertisements
 # Find out how to test ipv6 functionality (friendly tests)
 # Write wrappers for scapy for convenient answer generation.
 # Create custom topology with mininet for  scripting and maybe a makefile or something like that for starting
 # tests etc.
 
 
-###################################
-from scapy import all as scapy
 from ryu.base import app_manager
 from ryu.controller import ofp_event
 from ryu.controller.handler import CONFIG_DISPATCHER, MAIN_DISPATCHER, DEAD_DISPATCHER
 from ryu.controller.handler import set_ev_cls
 from ryu.lib.packet import ether_types, ethernet, packet, ipv6
 from ryu.ofproto import ofproto_v1_3
+###################################
+# Solve this import thing, its annoying
+from scapy import all as scapy
 
 from config import router_mac
-from helpers import mac2ipv6
+from helpers import mac2ipv6, make_sn_mc
 from nc.neighbor_cache import NeighborCache
 
 ICMPv6_CODES = {133: 'Router Solicitation',
@@ -57,6 +53,8 @@ class SimpleSwitch13(app_manager.RyuApp):
         self.mac_to_port = {}
         self.neighbor_cache = NeighborCache()
         self.logger.info("Neighbor Cache Created")
+        self.statistics = {'cache_miss_count': 0
+                           }
 
     @set_ev_cls(ofp_event.EventOFPStateChange,
                 [MAIN_DISPATCHER, DEAD_DISPATCHER])
@@ -76,7 +74,6 @@ class SimpleSwitch13(app_manager.RyuApp):
         datapath = ev.msg.datapath
         ofproto = datapath.ofproto
         parser = datapath.ofproto_parser
-
         # install table-miss flow entry
         #
         # We specify NO BUFFER to max_len of the output action due to
@@ -224,14 +221,17 @@ class SimpleSwitch13(app_manager.RyuApp):
         cache_entry = self._addr_in_cache(ipv6_dst)
         if cache_entry:
             self.logger.info("Cache hit, responding with our own NA.")
-            self._learn_mac_send(dpid, src, dst, in_port, msg, forward_packet=False)
-
             na = self._create_na(ipv6_header.src, ipv6_header.dst, src, dst)
-            self._send_packet(na, dpid)
+            self._send_packet(na, dpid=dpid)
         else:
             # TODO: Implement logic as in email
-            self.logger.info("Cache miss, forwarding NS, we need to change this.")
-            self._learn_mac_send(dpid, src, dst, in_port, msg, forward_packet=True)
+            self.logger.info("Cache miss, generating NS.")
+            self.statistics['cache_miss_count'] += 1
+            # TODO: Should mac be learned on cache miss?
+            ns = self._create_ns(ipv6_header.dst, dst)
+            self._send_packet(ns, dpid=dpid)
+
+        self._learn_mac_send(dpid, src, dst, in_port, msg, forward_packet=False)
 
     def _na_handler(self, dpid, src, dst, in_port, cookie, msg):
         self.logger.info(ICMPv6_CODES[cookie] + ": %s %s %s %s cookie=%d", dpid, src, dst, in_port, cookie)
@@ -280,23 +280,53 @@ class SimpleSwitch13(app_manager.RyuApp):
         # Advertisement
         ether_head = scapy.Ether(dst=dst_mac, src=src_mac)
         ipv6_head = scapy.IPv6(src=src_ip, dst=dst_ip)
-        icmpv6_ns = scapy.ICMPv6ND_NA(tgt=src_ip, R='0')
+        icmpv6_ns = scapy.ICMPv6ND_NA(tgt=src_ip, R=0)
         icmpv6_opt_pref = scapy.ICMPv6NDOptPrefixInfo()
         # Is this the address the answer will be sent to?
         llSrcAdd = scapy.ICMPv6NDOptSrcLLAddr(lladdr=src_mac)
 
-        adv = (ether_head / ipv6_head / icmpv6_ns / icmpv6_opt_pref/ llSrcAdd)
-        print(adv.show())
+        adv = (ether_head / ipv6_head / icmpv6_ns / icmpv6_opt_pref / llSrcAdd)
+        # print(adv.show())
 
         return adv
 
-    def _send_packet(self, pkt, dpid):
+    # TODO: Look at actions and parser in _send_ra, need todo this as well
+    # TODO: Put this in wiki, Thomas' code did not work because no ether_head and possibly no prefix info
+    def _create_ns(self, dst_ip, dst_mac, src_ip='::', src_mac=router_mac):
+        # TODO: What mac should we use here src? Some standard bogus mac? Or just the one from the router?
+        # Solicitation
+        ether_head = scapy.Ether(dst=dst_mac, src=src_mac)
+        # With solicited node multicast
+        ipv6_head = scapy.IPv6(src=src_ip, dst=make_sn_mc(dst_ip))
+        # Global address
+        icmpv6_ns = scapy.ICMPv6ND_NS(tgt=dst_ip)
+        icmpv6_opt_pref = scapy.ICMPv6NDOptPrefixInfo()
+
+        sol = (ether_head / ipv6_head / icmpv6_ns / icmpv6_opt_pref)
+
+        return sol
+
+    def _send_packet(self, pkt, dpid=None):
+        # If specific dpid
+        if dpid:
+            datapaths = [dpid]
+
+        # Else send on all
+        else:
+            datapaths = self.datapaths.keys()
+
+        for dp in datapaths:
+            self._send_on_dp(pkt, dp)
+
+    def _send_on_dp(self, pkt, dpid):
         datapath = self.datapaths[dpid]
         ofproto = datapath.ofproto
         parser = datapath.ofproto_parser
+        # print("before bytes")
+        # print(pkt.show())
         ps = bytes(pkt)
-        if pkt.ether.dst in self.mac_to_port[dpid]:
-            out_port = self.mac_to_port[dpid][pkt.ether.dst]
+        if pkt['Ether'].dst in self.mac_to_port[dpid]:
+            out_port = self.mac_to_port[dpid][pkt['Ether'].dst]
         else:
             out_port = ofproto.OFPP_FLOOD
 
@@ -305,5 +335,3 @@ class SimpleSwitch13(app_manager.RyuApp):
                                   buffer_id=ofproto.OFP_NO_BUFFER,
                                   in_port=ofproto.OFPP_CONTROLLER, actions=actions, data=ps)
         datapath.send_msg(out)
-
-
