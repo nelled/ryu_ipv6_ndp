@@ -26,7 +26,7 @@ from ryu.base import app_manager
 from ryu.controller import ofp_event
 from ryu.controller.handler import CONFIG_DISPATCHER, MAIN_DISPATCHER, DEAD_DISPATCHER
 from ryu.controller.handler import set_ev_cls
-from ryu.lib.packet import ether_types, ethernet, packet, ipv6
+from ryu.lib.packet import ether_types, ethernet, packet, ipv6, icmpv6
 from ryu.ofproto import ofproto_v1_3
 ###################################
 # Solve this import thing, its annoying
@@ -208,33 +208,60 @@ class SimpleSwitch13(app_manager.RyuApp):
         self._send_ra_s(dpid, src)
 
     def _ra_handler(self, dpid, src, dst, in_port, cookie, msg):
-        # Do nothing, controller is the only one emitting advertisements.
-        # Probably log and do not forward
+        # Log and do not forward, only controller emits RAs
         self.logger.info(ICMPv6_CODES[cookie] + ": %s %s %s %s cookie=%d", dpid, src, dst, in_port, cookie)
 
     def _ns_handler(self, dpid, src, dst, in_port, cookie, msg):
         self.logger.info(ICMPv6_CODES[cookie] + ": %s %s %s %s cookie=%d", dpid, src, dst, in_port, cookie)
-        pkt = packet.Packet(msg.data)
-        ipv6_header = pkt.get_protocol(ipv6.ipv6)
-        ipv6_dst = ipv6_header.dst
-        ipv6_src = ipv6_header.src
-        #ToDo: extract IPv6 target from NS message and passing it on to _create_ns
-        #ipv6_tgt =
+        ipv6_dst, ipv6_src, icmpv6_tgt = self._extract_addr(msg)
         self.logger.info("Handling NS, DST IS: %s", ipv6_dst)
         cache_entry = self._addr_in_cache(ipv6_dst)
+        is_for_router = self._is_for_router(dst)
         if cache_entry:
             self.logger.info("Cache hit, responding with our own NA.")
-            na = self._create_na(ipv6_header.src, ipv6_header.dst, src, dst)
+            na = self._create_na(ipv6_src, ipv6_dst, src, dst)
+            self.logger.info("NA looks like this:")
+            self.logger.info(na.show())
             self._send_packet(na, dpid=dpid)
+            self.logger.info("NA sent")
+        if is_for_router:
+            self.logger.info("Received NS for router, responding with our own NA.")
+            # Reverse src and dst in signature here
+            na = self._create_na(ipv6_dst, ipv6_src, dst, src, r=1)
+            self.logger.info("NA looks like this:")
+            self.logger.info(na.show())
+            self._send_packet(na, dpid=dpid)
+            self.logger.info("NA sent")
         else:
-            # TODO: Implement logic as in email
             self.logger.info("Cache miss, generating NS.")
             self.statistics['cache_miss_count'] += 1
             # TODO: Should mac be learned on cache miss?
-            ns = self._create_ns(ipv6_header.dst, dst, src_ip=ipv6_src, src_mac=src)
+            ns = self._create_ns(ipv6_dst, dst, src_ip=ipv6_src, src_mac=src, tgt_ip=icmpv6_tgt)
+            self.logger.info("NS looks like this:")
+            self.logger.info(ns.show())
             self._send_packet(ns, dpid=dpid)
+            self.logger.info("NS sent")
 
         self._learn_mac_send(dpid, src, dst, in_port, msg, forward_packet=False)
+
+    def _is_for_router(self, dst):
+        if dst == router_mac:
+            return True
+        else:
+            return False
+
+    # Takes msg and returns src, dst, and icmpv6 tgt
+    def _extract_addr(self, msg):
+        pkt = packet.Packet(msg.data)
+        ipv6_header = pkt.get_protocol(ipv6.ipv6)
+        # TODO: make this safer, is there a possibility that data is of wrong format or pkt does not have the element?
+        icmpv6_header = pkt[2].data
+        ipv6_dst = ipv6_header.dst
+        ipv6_src = ipv6_header.src
+        icmpv6_tgt = icmpv6_header.dst
+
+        return ipv6_dst, ipv6_src, icmpv6_tgt
+
 
     def _na_handler(self, dpid, src, dst, in_port, cookie, msg):
         self.logger.info(ICMPv6_CODES[cookie] + ": %s %s %s %s cookie=%d", dpid, src, dst, in_port, cookie)
@@ -258,7 +285,7 @@ class SimpleSwitch13(app_manager.RyuApp):
         h = scapy.IPv6()
         h.dest = 'ff02::1'
         h.src = mac2ipv6(router_mac)
-        i = scapy.ICMPv6ND_RA()
+        i = scapy.ICMPv6ND_RA(S=1)
         o = scapy.ICMPv6NDOptPrefixInfo()
         o.prefix = '2001:db8:1::'
         o.prefixlen = 64
@@ -279,11 +306,11 @@ class SimpleSwitch13(app_manager.RyuApp):
     def _addr_in_cache(self, ip):
         return self.neighbor_cache.get_entry(ip)
 
-    def _create_na(self, src_ip, dst_ip, src_mac, dst_mac):
+    def _create_na(self, src_ip, dst_ip, src_mac, dst_mac, r=0, s=1):
         # Advertisement
         ether_head = scapy.Ether(dst=dst_mac, src=src_mac)
         ipv6_head = scapy.IPv6(src=src_ip, dst=dst_ip)
-        icmpv6_ns = scapy.ICMPv6ND_NA(tgt=src_ip, R=0)
+        icmpv6_ns = scapy.ICMPv6ND_NA(tgt=src_ip, R=r, S=s)
         icmpv6_opt_pref = scapy.ICMPv6NDOptPrefixInfo()
         # Is this the address the answer will be sent to?
         llSrcAdd = scapy.ICMPv6NDOptSrcLLAddr(lladdr=src_mac)
@@ -309,12 +336,9 @@ class SimpleSwitch13(app_manager.RyuApp):
         ipv6_head = scapy.IPv6(src=src_ip, dst=make_sn_mc(dst_ip))
         # Global address
         icmpv6_ns = scapy.ICMPv6ND_NS(tgt=tgt_ip)
-        #icmpv6_opt_pref = scapy.ICMPv6NDOptPrefixInfo()
         icmpv6_opt_pref = scapy.ICMPv6NDOptSrcLLAddr(lladdr=src_mac)
 
-
         sol = (ether_head / ipv6_head / icmpv6_ns / icmpv6_opt_pref)
-        print(sol.show())
 
         return sol
 
