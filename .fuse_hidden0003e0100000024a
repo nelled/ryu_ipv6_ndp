@@ -217,9 +217,6 @@ class SimpleSwitch13(app_manager.RyuApp):
         pkt = packet.Packet(msg.data)
         ipv6_header = pkt.get_protocol(ipv6.ipv6)
         ipv6_dst = ipv6_header.dst
-        ipv6_src = ipv6_header.src
-        #ToDo: extract IPv6 target from NS message and passing it on to _create_ns
-        #ipv6_tgt =
         self.logger.info("Handling NS, DST IS: %s", ipv6_dst)
         cache_entry = self._addr_in_cache(ipv6_dst)
         if cache_entry:
@@ -231,7 +228,7 @@ class SimpleSwitch13(app_manager.RyuApp):
             self.logger.info("Cache miss, generating NS.")
             self.statistics['cache_miss_count'] += 1
             # TODO: Should mac be learned on cache miss?
-            ns = self._create_ns(ipv6_header.dst, dst, src_ip=ipv6_src, src_mac=src)
+            ns = self._create_ns(ipv6_header.dst, dst)
             self._send_packet(ns, dpid=dpid)
 
         self._learn_mac_send(dpid, src, dst, in_port, msg, forward_packet=False)
@@ -295,26 +292,17 @@ class SimpleSwitch13(app_manager.RyuApp):
 
     # TODO: Look at actions and parser in _send_ra, need todo this as well
     # TODO: Put this in wiki, Thomas' code did not work because no ether_head and possibly no prefix info
-    def _create_ns(self, dst_ip, dst_mac, src_ip=None, src_mac=None, tgt_ip=None):
+    def _create_ns(self, dst_ip, dst_mac, src_ip='::', src_mac=router_mac):
         # TODO: What mac should we use here src? Some standard bogus mac? Or just the one from the router?
         # Solicitation
-        if src_ip is None:
-            src_ip = mac2ipv6(router_mac)
-        if src_mac is None:
-            src_mac = router_mac
-        if tgt_ip is None:
-            tgt_ip = dst_ip
         ether_head = scapy.Ether(dst=dst_mac, src=src_mac)
         # With solicited node multicast
         ipv6_head = scapy.IPv6(src=src_ip, dst=make_sn_mc(dst_ip))
         # Global address
-        icmpv6_ns = scapy.ICMPv6ND_NS(tgt=tgt_ip)
-        #icmpv6_opt_pref = scapy.ICMPv6NDOptPrefixInfo()
-        icmpv6_opt_pref = scapy.ICMPv6NDOptSrcLLAddr(lladdr=src_mac)
-
+        icmpv6_ns = scapy.ICMPv6ND_NS(tgt=dst_ip)
+        icmpv6_opt_pref = scapy.ICMPv6NDOptPrefixInfo()
 
         sol = (ether_head / ipv6_head / icmpv6_ns / icmpv6_opt_pref)
-        print(sol.show())
 
         return sol
 
