@@ -47,8 +47,9 @@ class CacheManager(SimpleSwitch13):
             # TODO: Maybe probe counter? Should we abort after some attempts
             # Or resend every update interval until deletion?
             if age > 1.2 * REACHABLE_TIME:
+                self.logger.info("Probing...")
                 self._send_ns(v)
-                print('Probe sent')
+                self.logger.info("Probe sent")
                 v.set_probe()
             if age > 3 * REACHABLE_TIME:
                 v.set_delete()
@@ -60,6 +61,7 @@ class CacheManager(SimpleSwitch13):
 
     def _send_ns(self, cache_entry):
         pkt = self._create_ns(cache_entry.ip, cache_entry.mac)
+        self.logger.info(pkt.show())
         self._send_all(pkt)
 
     def _send_all(self, pkt):
