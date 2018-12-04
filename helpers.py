@@ -13,10 +13,10 @@ def mac2ipv6(mac):
     parts[0] = "%x" % (int(parts[0], 16) ^ 2)
 
     # format output
-    ipv6Parts = []
+    ipv6_parts = []
     for i in range(0, len(parts), 2):
-        ipv6Parts.append("".join(parts[i:i + 2]))
-    ipv6 = IPv6Address("fe80::%s" % (":".join(ipv6Parts))).exploded
+        ipv6_parts.append("".join(parts[i:i + 2]))
+    ipv6 = IPv6Address("fe80::%s" % (":".join(ipv6_parts))).exploded
 
     return ipv6
 
@@ -31,21 +31,6 @@ def make_sn_mc(addr):
 def get_snmc_suffix(addr):
     ip = IPv6Address(addr).exploded
     return ip[-7:]
-
-
-# TODO: implement
-def create_ra():
-    pass
-
-
-# TODO: implement
-def create_ns():
-    pass
-
-
-# TODO: implement
-def create_na():
-    pass
 
 
 if __name__ == "__main__":

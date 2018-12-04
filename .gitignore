@@ -16,4 +16,6 @@ covhtml/
 coverage.xml
 nosetests.xml
 .idea
-/.fuse_hidden0003e0100000024b
+/.eggs*
+/.fuse*
+

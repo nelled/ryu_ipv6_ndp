@@ -16,18 +16,18 @@
 from ryu.lib import hub
 from scapy import all as scapy
 
-from cache_manager import CacheManager
 
 
 # Application that uses simple_switch_13 for packet switching
 # it runs a separate thread that sends a IPv6 RouterAdvertisement
 # every 30 seconds.
 # The RouterAdvertisement is build using scapy
+from switch_v6 import SimpleSwitch13
 from config import router_mac
 from helpers import mac2ipv6
 
 
-class SimpleV6nd13(CacheManager):
+class SimpleV6nd13(SimpleSwitch13):
 
     def __init__(self, *args, **kwargs):
         super(SimpleV6nd13, self).__init__(*args, **kwargs)
@@ -35,30 +35,10 @@ class SimpleV6nd13(CacheManager):
 
     def _cyclic_ra(self):
         while True:
-            for dp in self.datapaths.values():
-                self._send_ra(dp)
+            print(self.neighbor_cache)
+            self._send_ra()
             hub.sleep(30)
 
-    def _send_ra(self, datapath):
-        self.logger.info('sent IPv6_RA on Datapath: %016x', datapath.id)
-        ofproto = datapath.ofproto
-        parser = datapath.ofproto_parser
-        e = scapy.Ether(src=router_mac, dst='33:33:00:00:00:01')
-        h = scapy.IPv6()
-        h.dest = 'ff02::1'
-        h.src = mac2ipv6(router_mac)
-        i = scapy.ICMPv6ND_RA()
-        o = scapy.ICMPv6NDOptPrefixInfo()
-        o.prefix = '2001:db8:1::'
-        o.prefixlen = 64
-        p = (e / h / i / o)
-        print(p.show())
-        ps = bytes(p)
-        actions = [parser.OFPActionOutput(ofproto.OFPP_FLOOD)]
-        out = parser.OFPPacketOut(datapath=datapath,
-                                  buffer_id=ofproto.OFP_NO_BUFFER,
-                                  in_port=ofproto.OFPP_CONTROLLER, actions=actions, data=ps)
-        datapath.send_msg(out)
 
 
 
