@@ -21,9 +21,8 @@ class NeighborCache:
             self.entries.iterload([mac, ip, cookie], [CacheEntry(ip, mac, cookie)])
         else:
             entry.set_active()
-            if entry.has_ip(ip):
-                entry.reset_updated()
-            else:
+            entry.reset_updated()
+            if not entry.has_ip(ip):
                 entry.add_ip(ip)
                 self.entries[ip] = entry
             cookie = entry.cookie
@@ -34,12 +33,19 @@ class NeighborCache:
         # Key can be ip, mac, cookie
         return self.entries.get(key, None)
 
-    def delete_entry(self, key):
+    def delete_entry_by_key(self, key):
         entry = self.get_entry(key)
         if entry:
             keys = copy.copy(self.entries.values[entry])
             for k in keys:
                 del self.entries[k]
+        return entry
+
+    def delete_entry_by_entry(self, entry):
+        keys = copy.copy(self.entries.values[entry])
+        for k in keys:
+            del self.entries[k]
+
         return entry
 
     def set_stale(self, key):
@@ -61,6 +67,6 @@ class NeighborCache:
         pass
 
     def __str__(self):
-        headers = ['MAC', 'IP', 'Age', 'Cookie', 'Status']
-        data = [[v.mac, '\n'.join(v.ips), v.get_age(), v.get_cookie(), v.status] for v in self.entries.get_entries_list()]
+        headers = ['MAC', 'IP', 'Age','Last Updated', 'Cookie', 'Status']
+        data = [[v.mac, '\n'.join(v.ips), v.get_age(), v.get_last_updated(), v.get_cookie(), v.status] for v in self.entries.get_entries_list()]
         return tabulate(data, headers=headers, tablefmt='fancy_grid')

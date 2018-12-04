@@ -22,12 +22,12 @@ from scapy import all as scapy
 # it runs a separate thread that sends a IPv6 RouterAdvertisement
 # every 30 seconds.
 # The RouterAdvertisement is build using scapy
-from switch_v6 import SimpleSwitch13
+from cache_manager import CacheManager
 from config import router_mac
 from helpers import mac2ipv6
 
 
-class SimpleV6nd13(SimpleSwitch13):
+class SimpleV6nd13(CacheManager):
 
     def __init__(self, *args, **kwargs):
         super(SimpleV6nd13, self).__init__(*args, **kwargs)

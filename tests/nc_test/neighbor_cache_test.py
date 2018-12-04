@@ -27,7 +27,7 @@ class NeighborCacheTest(unittest.TestCase):
         ip, mac = '127.0.0.1', '00:00:00:00:00:00'
         nc.add_entry(ip, mac)
         entry = nc.get_entry(mac)
-        nc.delete_entry(mac)
+        nc.delete_entry_by_key(mac)
         self.assertEqual(nc.get_entry(mac), None)
         self.assertEqual(nc.get_entry(ip), None)
         with self.assertRaises(KeyError):
