@@ -1,19 +1,66 @@
+import copy
+
 from tabulate import tabulate
 
 from nc.cache_entry import CacheEntry
+from nc.multi_dict import MultiDict
 
 
 class NeighborCache:
+    MAC_MASK = 0xFFFFFFFFFFFF
+    COUNTER_MASK = 0xFFFF000000000000
+
     def __init__(self):
-        self.entries = {}
+        self.entries = MultiDict()
+        self.cookie_counter = 0
 
     def add_entry(self, ip, mac):
-        self.entries[ip] = CacheEntry(ip, mac)
+        entry = self.get_entry(mac)
+        if not entry:
+            cookie = self._gen_cookie(mac)
+            self.entries.iterload([mac, ip, cookie], [CacheEntry(ip, mac, cookie)])
+        else:
+            entry.set_active()
+            if entry.has_ip(ip):
+                entry.reset_updated()
+            else:
+                entry.add_ip(ip)
+                self.entries[ip] = entry
+            cookie = entry.cookie
 
-    def get_entry(self, ip):
-        return self.entries.get(ip, None)
+        return cookie
+
+    def get_entry(self, key):
+        # Key can be ip, mac, cookie
+        return self.entries.get(key, None)
+
+    def delete_entry(self, key):
+        entry = self.get_entry(key)
+        if entry:
+            keys = copy.copy(self.entries.values[entry])
+            for k in keys:
+                del self.entries[k]
+        return entry
+
+    def set_stale(self, key):
+        entry = self.get_entry(key)
+        entry.set_stale()
+
+    def _gen_cookie(self, mac):
+        int_mac = self._mac_to_int(mac)
+        print(int_mac)
+        cookie = (self.cookie_counter << 48) | int_mac
+        self.cookie_counter = (self.cookie_counter + 1 & 0xFFFF)
+        return cookie
+
+    def _mac_to_int(self, mac):
+        return int('0x' + mac.replace(':', ''), 16)
+
+    # TODO: Implement
+    def _check_cookie(self, cookie):
+        pass
 
     def __str__(self):
-        headers = ['IP', 'MAC', 'State', 'Age']
-        data = [[v.ip, v.mac, v.state, v.get_age()] for k, v in self.entries.items()]
+        headers = ['MAC', 'IP', 'Age', 'Cookie', 'Status']
+        data = [[v.mac, '\n'.join(v.ips), v.get_age(), v.get_cookie(), v.status] for v in self.entries.get_entries_list()]
         return tabulate(data, headers=headers, tablefmt='fancy_grid')

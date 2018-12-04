@@ -17,22 +17,22 @@
 #####>>>>TODO<<<<###################
 # Normal learning has to be retained
 # Find out how to test ipv6 functionality (friendly tests)
-# Write wrappers for scapy for convenient answer generation.
 # Create custom topology with mininet for  scripting and maybe a makefile or something like that for starting
 # tests etc.
+
 
 
 from ryu.base import app_manager
 from ryu.controller import ofp_event
 from ryu.controller.handler import CONFIG_DISPATCHER, MAIN_DISPATCHER, DEAD_DISPATCHER
 from ryu.controller.handler import set_ev_cls
-from ryu.lib.packet import ether_types, ethernet, packet, ipv6, icmpv6
+from ryu.lib.packet import ether_types, ethernet, packet, ipv6
 from ryu.ofproto import ofproto_v1_3
 ###################################
 # Solve this import thing, its annoying
 from scapy import all as scapy
 
-from config import router_mac
+from config import router_mac, rule_idle_timeout, router_dns
 from helpers import mac2ipv6, make_sn_mc
 from nc.neighbor_cache import NeighborCache
 
@@ -84,14 +84,14 @@ class SimpleSwitch13(app_manager.RyuApp):
         match = parser.OFPMatch()
         actions = [parser.OFPActionOutput(ofproto.OFPP_CONTROLLER,
                                           ofproto.OFPCML_NO_BUFFER)]
-        self.add_flow(datapath, 0, match, actions)
+        self.add_flow(datapath, 0, match, actions, timeout=0)
 
         # Install match for all ICMPv6 messages
         for icmp_code in range(133, 137 + 1):
             match = parser.OFPMatch(eth_type=0x86dd, ip_proto=58, icmpv6_type=icmp_code)
-            self.add_flow(datapath, 10, match, actions, cookie=icmp_code)
+            self.add_flow(datapath, 10, match, actions, cookie=icmp_code, timeout=0)
 
-    def add_flow(self, datapath, priority, match, actions, buffer_id=None, cookie=0):
+    def add_flow(self, datapath, priority, match, actions, buffer_id=None, cookie=0, timeout=rule_idle_timeout):
         print("Added flow for: " + str(match))
         ofproto = datapath.ofproto
         parser = datapath.ofproto_parser
@@ -101,14 +101,19 @@ class SimpleSwitch13(app_manager.RyuApp):
         if buffer_id:
             mod = parser.OFPFlowMod(datapath=datapath, buffer_id=buffer_id,
                                     priority=priority, match=match,
-                                    instructions=inst, cookie=cookie)
+                                    instructions=inst, cookie=cookie,
+                                    hard_timeout=0, idle_timeout=timeout,
+                                    flags=ofproto.OFPFF_SEND_FLOW_REM)
         else:
             mod = parser.OFPFlowMod(datapath=datapath, priority=priority,
-                                    match=match, instructions=inst, cookie=cookie)
+                                    match=match, instructions=inst, cookie=cookie,
+                                    hard_timeout=0, idle_timeout=timeout,
+                                    flags=ofproto.OFPFF_SEND_FLOW_REM)
         datapath.send_msg(mod)
 
     @set_ev_cls(ofp_event.EventOFPPacketIn, MAIN_DISPATCHER)
     def _packet_in_handler(self, ev):
+        self._print_events()
         # If you hit this you might want to increase
         # the "miss_send_length" of your switch
         if ev.msg.msg_len < ev.msg.total_len:
@@ -142,13 +147,15 @@ class SimpleSwitch13(app_manager.RyuApp):
         else:
             self.logger.info("Another Message: %s %s %s %s reason=%s match=%s cookie=%d ether=%d", dpid, src, dst,
                              in_port, reason, msg.match, msg.cookie, eth.ethertype)
+            # toDO: Do we learn a flow here? Or do we only allow communication between hosts which have successfully
+            # completed ND and therefore are in our neighbor cache and already have a valif flow rule?
             self._learn_mac_send(dpid, src, dst, in_port, msg)
 
     def _learn_mac(self, dpid, src, in_port):
         self.mac_to_port[dpid][src] = in_port
 
     # Normal behaviour outsourced to function so we can control what happens to ICMPv6 packets
-    def _learn_mac_send(self, dpid, src, dst, in_port, msg, forward_packet=True):
+    def _learn_mac_send(self, dpid, src, dst, in_port, msg, cookie=0, forward_packet=True):
         datapath = self.datapaths[dpid]
         ofproto = datapath.ofproto
         parser = datapath.ofproto_parser
@@ -167,15 +174,15 @@ class SimpleSwitch13(app_manager.RyuApp):
             match = parser.OFPMatch(in_port=in_port, eth_dst=dst, eth_src=src)
             # If we do not forward the packet (because we send our own NS back i.e.)
             if forward_packet == False:
-                self.add_flow(datapath, 1, match, actions)
+                self.add_flow(datapath, 1, match, actions, cookie=cookie)
                 return
             # verify if we have a valid buffer_id, if yes avoid to send both
             # flow_mod & packet_out
             if msg.buffer_id != ofproto.OFP_NO_BUFFER:
-                self.add_flow(datapath, 1, match, actions, msg.buffer_id)
+                self.add_flow(datapath, 1, match, actions, msg.buffer_id, cookie=cookie)
                 return
             else:
-                self.add_flow(datapath, 1, match, actions)
+                self.add_flow(datapath, 1, match, actions, cookie=cookie)
         data = None
         if msg.buffer_id == ofproto.OFP_NO_BUFFER:
             data = msg.data
@@ -183,6 +190,37 @@ class SimpleSwitch13(app_manager.RyuApp):
         out = parser.OFPPacketOut(datapath=datapath, buffer_id=msg.buffer_id,
                                   in_port=in_port, actions=actions, data=data)
         datapath.send_msg(out)
+
+    @set_ev_cls(ofp_event.EventOFPFlowRemoved, MAIN_DISPATCHER)
+    def _flow_removed_handler(self, ev):
+        msg = ev.msg
+        dp = msg.datapath
+        ofp = dp.ofproto
+        if msg.reason == ofp.OFPRR_IDLE_TIMEOUT:
+            reason = 'IDLE TIMEOUT'
+        elif msg.reason == ofp.OFPRR_HARD_TIMEOUT:
+            reason = 'HARD TIMEOUT'
+        elif msg.reason == ofp.OFPRR_DELETE:
+            reason = 'DELETE'
+        elif msg.reason == ofp.OFPRR_GROUP_DELETE:
+            reason = 'GROUP DELETE'
+        else:
+            reason = 'unknown'
+
+        self.logger.info('OFPFlowRemoved received: '
+                         'cookie=%d priority=%d reason=%s table_id=%d '
+                         'duration_sec=%d duration_nsec=%d '
+                         'idle_timeout=%d hard_timeout=%d '
+                         'packet_count=%d byte_count=%d match.fields=%s',
+                         msg.cookie, msg.priority, reason, msg.table_id,
+                         msg.duration_sec, msg.duration_nsec,
+                         msg.idle_timeout, msg.hard_timeout,
+                         msg.packet_count, msg.byte_count, msg.match)
+        try:
+            self.neighbor_cache.set_stale(msg.cookie)
+            print(self.neighbor_cache)
+        except AttributeError:
+            self.logger.info("Flow removed message does not concern cache.")
 
     def _ndp_packet_handler(self, dpid, src, dst, in_port, cookie, msg):
         if cookie == 133:
@@ -202,10 +240,8 @@ class SimpleSwitch13(app_manager.RyuApp):
 
     def _rs_handler(self, dpid, src, dst, in_port, cookie, msg):
         # Respond with router advertisement immediately
-        # Send to all or only to node asking?
-        # Send to port or flood?
         self.logger.info(ICMPv6_CODES[cookie] + ": %s %s %s %s cookie=%d", dpid, src, dst, in_port, cookie)
-        self._send_ra_s(dpid, src)
+        self._send_ra(dpid=dpid, dst=src)
 
     def _ra_handler(self, dpid, src, dst, in_port, cookie, msg):
         # Log and do not forward, only controller emits RAs
@@ -241,8 +277,8 @@ class SimpleSwitch13(app_manager.RyuApp):
             self.logger.info(ns.show())
             self._send_packet(ns, dpid=dpid)
             self.logger.info("NS sent")
-
-        self._learn_mac_send(dpid, src, dst, in_port, msg, forward_packet=False)
+        # TODO: Should we only learn MAC on NA? Here we create a flow but do not create a cache entry
+        # self._learn_mac_send(dpid, src, dst, in_port, msg, forward_packet=False)
 
     def _is_for_router(self, dst):
         if dst == router_mac:
@@ -262,46 +298,16 @@ class SimpleSwitch13(app_manager.RyuApp):
 
         return ipv6_dst, ipv6_src, icmpv6_tgt
 
-
     def _na_handler(self, dpid, src, dst, in_port, cookie, msg):
         self.logger.info(ICMPv6_CODES[cookie] + ": %s %s %s %s cookie=%d", dpid, src, dst, in_port, cookie)
         pkt = packet.Packet(msg.data)
         ip6_header = pkt.get_protocol(ipv6.ipv6)
-        self.neighbor_cache.add_entry(ip6_header.src, src)
+        cache_id_cookie = self.neighbor_cache.add_entry(ip6_header.src, src)
         print(self.neighbor_cache)
-        self._learn_mac_send(dpid, src, dst, in_port, msg)
+        self._learn_mac_send(dpid, src, dst, in_port, msg, cache_id_cookie)
 
     def _rm_handler(self, dpid, src, dst, in_port, cookie, msg):
         self.logger.info(ICMPv6_CODES[cookie] + ": %s %s %s %s cookie=%d", dpid, src, dst, in_port, cookie)
-
-    # TODO: Implement ONE send_ra function that takes arguments
-    # like solicited true false etc
-    def _send_ra_s(self, dpid, dst):
-        self.logger.info('Sent sol RA on dp: %016x to %s', dpid, dst)
-        datapath = self.datapaths[dpid]
-        ofproto = datapath.ofproto
-        parser = datapath.ofproto_parser
-        e = scapy.Ether(src=router_mac, dst=dst)
-        h = scapy.IPv6()
-        h.dest = 'ff02::1'
-        h.src = mac2ipv6(router_mac)
-        i = scapy.ICMPv6ND_RA(S=1)
-        o = scapy.ICMPv6NDOptPrefixInfo()
-        o.prefix = '2001:db8:1::'
-        o.prefixlen = 64
-        p = (e / h / i / o)
-        print(p.show())
-        ps = bytes(p)
-        if dst in self.mac_to_port[dpid]:
-            out_port = self.mac_to_port[dpid][dst]
-        else:
-            out_port = ofproto.OFPP_FLOOD
-
-        actions = [parser.OFPActionOutput(out_port)]
-        out = parser.OFPPacketOut(datapath=datapath,
-                                  buffer_id=ofproto.OFP_NO_BUFFER,
-                                  in_port=ofproto.OFPP_CONTROLLER, actions=actions, data=ps)
-        datapath.send_msg(out)
 
     def _addr_in_cache(self, ip):
         return self.neighbor_cache.get_entry(ip)
@@ -314,16 +320,12 @@ class SimpleSwitch13(app_manager.RyuApp):
         icmpv6_opt_pref = scapy.ICMPv6NDOptPrefixInfo()
         # Is this the address the answer will be sent to?
         llSrcAdd = scapy.ICMPv6NDOptSrcLLAddr(lladdr=src_mac)
-
         adv = (ether_head / ipv6_head / icmpv6_ns / icmpv6_opt_pref / llSrcAdd)
-        # print(adv.show())
 
         return adv
 
-    # TODO: Look at actions and parser in _send_ra, need todo this as well
     # TODO: Put this in wiki, Thomas' code did not work because no ether_head and possibly no prefix info
     def _create_ns(self, dst_ip, dst_mac, src_ip=None, src_mac=None, tgt_ip=None):
-        # TODO: What mac should we use here src? Some standard bogus mac? Or just the one from the router?
         # Solicitation
         if src_ip is None:
             src_ip = mac2ipv6(router_mac)
@@ -342,6 +344,41 @@ class SimpleSwitch13(app_manager.RyuApp):
 
         return sol
 
+    def _send_ra(self, dpid=None, dst=None):
+        if not dst:
+            dst = '33:33:00:00:00:01'
+        self.logger.info('Sending RA to: %s', dst)
+        ra = self._create_ra(dst=dst)
+        self.logger.info('RA looks like this:')
+        ra.show()
+        self._send_packet(ra, dpid)
+        self.logger.info('RA sent.')
+
+    def _create_ra(self, dst=None):
+        ether_head = scapy.Ether(src=router_mac, dst=dst)
+        ipv6_head = scapy.IPv6()
+        ipv6_head.dest = 'ff02::1'
+        ipv6_head.src = mac2ipv6(router_mac)
+        ipv6_ra = scapy.ICMPv6ND_RA()
+        ipv6_nd_pref = scapy.ICMPv6NDOptPrefixInfo()
+        ipv6_nd_pref.prefix = '2001:db8:1::'
+        ipv6_nd_pref.prefixlen = 64
+        ipv6_nd_pref.validlifetime = 7200  # Valid-Lifetime 2h
+        ipv6_nd_pref.preferredlifetime = 1800  # Prefered-Lifetime 30min
+        o_route = scapy.ICMPv6NDOptRouteInfo()  # ICMPv6-Option: Route Information
+        o_route.prefix = '::'  # Default Route
+        o_route.plen = 0  # Prefix length in bit
+        o_route.rtlifetime = 1800  # Same value as the Prefered-Lifetime of the Router
+        o_rdns = scapy.ICMPv6NDOptRDNSS()  # ICMPv6-Option: Recursive DNS Server
+        o_rdns.dns = router_dns  # List of DNS Server Addresses
+        o_rdns.lifetime = 1800  # Same value as the Prefered-Lifetime of the Router
+
+        o_mac = scapy.ICMPv6NDOptSrcLLAddr()  # ICMPv6-Option: Source Link Layer Address
+        o_mac.lladdr = router_mac  # MAC address
+
+        ra = (ether_head / ipv6_head / ipv6_ra / ipv6_nd_pref / o_route / o_rdns / o_mac)
+        return ra
+
     def _send_packet(self, pkt, dpid=None):
         # If specific dpid
         if dpid:
@@ -358,8 +395,6 @@ class SimpleSwitch13(app_manager.RyuApp):
         datapath = self.datapaths[dpid]
         ofproto = datapath.ofproto
         parser = datapath.ofproto_parser
-        # print("before bytes")
-        # print(pkt.show())
         ps = bytes(pkt)
         if pkt['Ether'].dst in self.mac_to_port[dpid]:
             out_port = self.mac_to_port[dpid][pkt['Ether'].dst]
@@ -371,3 +406,8 @@ class SimpleSwitch13(app_manager.RyuApp):
                                   buffer_id=ofproto.OFP_NO_BUFFER,
                                   in_port=ofproto.OFPP_CONTROLLER, actions=actions, data=ps)
         datapath.send_msg(out)
+
+    def _print_events(self):
+        self.logger.info("Printing queue...")
+        for ev in list(self.events.queue):
+            print(ev)
