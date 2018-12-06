@@ -14,6 +14,8 @@
 # limitations under the License.
 
 import json
+from collections import defaultdict
+from time import time
 
 from ryu.app.wsgi import ControllerBase, WSGIApplication, route
 from ryu.base import app_manager
@@ -50,8 +52,10 @@ class NdpProxy(app_manager.RyuApp):
         self.mac_to_port = {}
         self.neighbor_cache = NeighborCache()
         self.logger.info("Neighbor Cache Created")
-        self.statistics = {'cache_miss_count': 0
+        self.statistics = {'cache_miss_count': 0,
+                           'router_ads': defaultdict(lambda: defaultdict(list))
                            }
+
         wsgi = kwargs['wsgi']
         wsgi.register(NdpProxyController,
                       {ndp_proxy_instance_name: self})
@@ -243,6 +247,8 @@ class NdpProxy(app_manager.RyuApp):
     def _ra_handler(self, dpid, src, dst, in_port, cookie, msg):
         # Log and do not forward, only controller emits RAs
         self.logger.info(ICMPv6_CODES[cookie] + ": %s %s %s %s cookie=%d", dpid, src, dst, in_port, cookie)
+        self.statistics['router_ads'][dpid][in_port].append((src, time()))
+
 
     def _ns_handler(self, dpid, src, dst, in_port, cookie, msg):
         self.logger.info(ICMPv6_CODES[cookie] + ": %s %s %s %s cookie=%d", dpid, src, dst, in_port, cookie)
@@ -411,5 +417,26 @@ class NdpProxyController(ControllerBase):
     @route('ndp_proxy', url + '/nc', methods=['GET'])
     def list_neighbor_cache(self, req, **kwargs):
         ndp_proxy = self.ndp_proxy_app
-        table = json.dumps(ndp_proxy.neighbor_cache.to_dict())
+        table = json.dumps(ndp_proxy.neighbor_cache.get_all_dict())
         return Response(content_type='application/json', text=table)
+
+    @route('ndp_proxy', url + '/ra-table', methods=['GET'])
+    def get_ra_table(self, req, **kwargs):
+        ndp_proxy = self.ndp_proxy_app
+        table = json.dumps(ndp_proxy.statistics['router_ads'])
+        return Response(content_type='application/json', text=table)
+
+    @route('ndp_proxy', url + '/write-pcap', methods=['PUT'])
+    def set_write_pcap(self, req, **kwargs):
+        pass
+
+    @route('ndp_proxy', url + '/write-pcap-generated', methods=['PUT'])
+    def set_write_pcap_generated(self, req, **kwargs):
+        pass
+
+    @route('ndp_proxy', url + '/get-active', methods=['GET'])
+    def get_active_hosts(self, req, **kwargs):
+        ndp_proxy = self.ndp_proxy_app
+        table = json.dumps(ndp_proxy.neighbor_cache.get_active_dict())
+        return Response(content_type='application/json', text=table)
+

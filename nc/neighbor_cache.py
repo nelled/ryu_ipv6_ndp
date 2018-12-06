@@ -62,16 +62,26 @@ class NeighborCache:
     def _mac_to_int(self, mac):
         return int('0x' + mac.replace(':', ''), 16)
 
-    def to_dict(self):
+    def _to_dict(self, l):
         nc_dict = {v.mac: {
             'mac': v.mac,
             'ips': v.ips,
             'tot_age': v.get_total_age(),
             'age': v.get_age(),
             'cookie': v.get_cookie(),
-            'status': v.status} for v in self.entries.get_entries_list()}
-        print(nc_dict)
+            'status': v.status} for v in l}
         return nc_dict
+
+    def get_all_dict(self):
+        return self._to_dict(self.entries.get_entries_list())
+
+    def get_active_dict(self):
+        return self._to_dict(self._get_active())
+
+    def _get_active(self):
+        entries_list = self.entries.get_entries_list()
+        active_entries = [v for v in entries_list if v.status == 'ACTIVE']
+        return active_entries
 
     def __str__(self):
         headers = ['MAC', 'IP', 'Total Age', 'Last Updated', 'Cookie', 'Status']
