@@ -17,11 +17,11 @@
 from ryu.lib import hub
 
 from config import cache_entry_timeout
-from switch_v6 import SimpleSwitch13
+from ndp_proxy import NdpProxy
 
 
 
-class CacheManager(SimpleSwitch13):
+class CacheManager(NdpProxy):
 
     def __init__(self, *args, **kwargs):
         super(CacheManager, self).__init__(*args, **kwargs)

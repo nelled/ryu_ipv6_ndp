@@ -18,19 +18,17 @@ from scapy import all as scapy
 
 
 
-# Application that uses simple_switch_13 for packet switching
+# Application that uses ndp_proxy for packet switching
 # it runs a separate thread that sends a IPv6 RouterAdvertisement
 # every 30 seconds.
 # The RouterAdvertisement is build using scapy
 from cache_manager import CacheManager
-from config import router_mac
-from helpers import mac2ipv6
 
 
-class SimpleV6nd13(CacheManager):
+class RaSender(CacheManager):
 
     def __init__(self, *args, **kwargs):
-        super(SimpleV6nd13, self).__init__(*args, **kwargs)
+        super(RaSender, self).__init__(*args, **kwargs)
         self.ra_thread = hub.spawn(self._cyclic_ra)
 
     def _cyclic_ra(self):

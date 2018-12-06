@@ -13,15 +13,17 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import json
+
+from ryu.app.wsgi import ControllerBase, WSGIApplication, route
 from ryu.base import app_manager
 from ryu.controller import ofp_event
 from ryu.controller.handler import CONFIG_DISPATCHER, MAIN_DISPATCHER, DEAD_DISPATCHER
 from ryu.controller.handler import set_ev_cls
 from ryu.lib.packet import ether_types, ethernet, packet, ipv6
 from ryu.ofproto import ofproto_v1_3
-###################################
-# Solve this import thing, its annoying
 from scapy import all as scapy
+from webob import Response
 
 from config import router_mac, rule_idle_timeout, router_dns
 from helpers import mac2ipv6, make_sn_mc
@@ -34,18 +36,25 @@ ICMPv6_CODES = {133: 'Router Solicitation',
                 137: 'Redirect'
                 }
 
+ndp_proxy_instance_name = 'ndp_proxy'
+url = '/ndp-proxy'
 
-class SimpleSwitch13(app_manager.RyuApp):
+
+class NdpProxy(app_manager.RyuApp):
     OFP_VERSIONS = [ofproto_v1_3.OFP_VERSION]
+    _CONTEXTS = {'wsgi': WSGIApplication}
 
     def __init__(self, *args, **kwargs):
-        super(SimpleSwitch13, self).__init__(*args, **kwargs)
+        super(NdpProxy, self).__init__(*args, **kwargs)
         self.datapaths = {}
         self.mac_to_port = {}
         self.neighbor_cache = NeighborCache()
         self.logger.info("Neighbor Cache Created")
         self.statistics = {'cache_miss_count': 0
                            }
+        wsgi = kwargs['wsgi']
+        wsgi.register(NdpProxyController,
+                      {ndp_proxy_instance_name: self})
 
     @set_ev_cls(ofp_event.EventOFPStateChange,
                 [MAIN_DISPATCHER, DEAD_DISPATCHER])
@@ -391,3 +400,16 @@ class SimpleSwitch13(app_manager.RyuApp):
                                   buffer_id=ofproto.OFP_NO_BUFFER,
                                   in_port=ofproto.OFPP_CONTROLLER, actions=actions, data=ps)
         datapath.send_msg(out)
+
+
+class NdpProxyController(ControllerBase):
+
+    def __init__(self, req, link, data, **config):
+        super(NdpProxyController, self).__init__(req, link, data, **config)
+        self.ndp_proxy_app = data[ndp_proxy_instance_name]
+
+    @route('ndp_proxy', url + '/nc', methods=['GET'])
+    def list_neighbor_cache(self, req, **kwargs):
+        ndp_proxy = self.ndp_proxy_app
+        table = json.dumps(ndp_proxy.neighbor_cache.to_dict())
+        return Response(content_type='application/json', text=table)

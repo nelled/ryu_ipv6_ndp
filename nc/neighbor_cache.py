@@ -62,9 +62,16 @@ class NeighborCache:
     def _mac_to_int(self, mac):
         return int('0x' + mac.replace(':', ''), 16)
 
-    # TODO: Implement
-    def _check_cookie(self, cookie):
-        pass
+    def to_dict(self):
+        nc_dict = {v.mac: {
+            'mac': v.mac,
+            'ips': v.ips,
+            'tot_age': v.get_total_age(),
+            'age': v.get_age(),
+            'cookie': v.get_cookie(),
+            'status': v.status} for v in self.entries.get_entries_list()}
+        print(nc_dict)
+        return nc_dict
 
     def __str__(self):
         headers = ['MAC', 'IP', 'Total Age', 'Last Updated', 'Cookie', 'Status']
