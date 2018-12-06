@@ -33,7 +33,7 @@ class CacheManager(SimpleSwitch13):
         while True:
             self._check_entries()
             print(self.neighbor_cache)
-            hub.sleep(cache_entry_timeout)
+            hub.sleep(cache_entry_timeout/2)
 
     # Checks cache entries and updates state depending on timer
     def _check_entries(self):
