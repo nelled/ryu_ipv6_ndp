@@ -5,7 +5,7 @@ from nc.multi_dict import MultiDict
 from nc.neighbor_cache import NeighborCache
 
 
-class NeighborCacheTest(unittest.TestCase):
+class TestNeighborCache(unittest.TestCase):
 
     def test_add_entry(self):
         nc = NeighborCache()
@@ -22,7 +22,7 @@ class NeighborCacheTest(unittest.TestCase):
         assert nc.get_entry(mac)
         self.assertEqual(nc.get_entry('0.0.0.0'), None)
 
-    def test_delete_entry(self):
+    def test_delete_entry_by_key(self):
         nc = NeighborCache()
         ip, mac = '127.0.0.1', '00:00:00:00:00:00'
         nc.add_entry(ip, mac)
@@ -32,6 +32,18 @@ class NeighborCacheTest(unittest.TestCase):
         self.assertEqual(nc.get_entry(ip), None)
         with self.assertRaises(KeyError):
             assert nc.entries.values[entry]
+
+    def test_delete_entry_by_entry(self):
+        nc = NeighborCache()
+        ip, mac = '127.0.0.1', '00:00:00:00:00:00'
+        nc.add_entry(ip, mac)
+        entry = nc.get_entry(mac)
+        nc.delete_entry_by_entry(entry)
+        self.assertEqual(nc.get_entry(mac), None)
+        self.assertEqual(nc.get_entry(ip), None)
+        with self.assertRaises(KeyError):
+            assert nc.entries.values[entry]
+
 
     def test_add_existing(self):
         nc = NeighborCache()

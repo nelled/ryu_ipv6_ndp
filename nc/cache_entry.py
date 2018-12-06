@@ -17,11 +17,11 @@ class CacheEntry:
         self.last_updated = time()
         self.created_at = time()
 
+    def get_total_age(self):
+        return time() - self.created_at
+
     def get_age(self):
         return time() - self.last_updated
-
-    def get_last_updated(self):
-        return self.last_updated
 
     def reset_updated(self):
         self.last_updated = time()

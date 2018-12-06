@@ -13,15 +13,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-####################################
-#####>>>>TODO<<<<###################
-# Normal learning has to be retained
-# Find out how to test ipv6 functionality (friendly tests)
-# Create custom topology with mininet for  scripting and maybe a makefile or something like that for starting
-# tests etc.
-
-
-
 from ryu.base import app_manager
 from ryu.controller import ofp_event
 from ryu.controller.handler import CONFIG_DISPATCHER, MAIN_DISPATCHER, DEAD_DISPATCHER
@@ -113,7 +104,6 @@ class SimpleSwitch13(app_manager.RyuApp):
 
     @set_ev_cls(ofp_event.EventOFPPacketIn, MAIN_DISPATCHER)
     def _packet_in_handler(self, ev):
-        self._print_events()
         # If you hit this you might want to increase
         # the "miss_send_length" of your switch
         if ev.msg.msg_len < ev.msg.total_len:
@@ -147,15 +137,13 @@ class SimpleSwitch13(app_manager.RyuApp):
         else:
             self.logger.info("Another Message: %s %s %s %s reason=%s match=%s cookie=%d ether=%d", dpid, src, dst,
                              in_port, reason, msg.match, msg.cookie, eth.ethertype)
-            # toDO: Do we learn a flow here? Or do we only allow communication between hosts which have successfully
-            # completed ND and therefore are in our neighbor cache and already have a valif flow rule?
-            self._learn_mac_send(dpid, src, dst, in_port, msg)
+            self._learn_mac_send(dpid, src, dst, in_port, msg, timeout=0)
 
     def _learn_mac(self, dpid, src, in_port):
         self.mac_to_port[dpid][src] = in_port
 
     # Normal behaviour outsourced to function so we can control what happens to ICMPv6 packets
-    def _learn_mac_send(self, dpid, src, dst, in_port, msg, cookie=0, forward_packet=True):
+    def _learn_mac_send(self, dpid, src, dst, in_port, msg, cookie=0, forward_packet=True, timeout=rule_idle_timeout):
         datapath = self.datapaths[dpid]
         ofproto = datapath.ofproto
         parser = datapath.ofproto_parser
@@ -174,15 +162,15 @@ class SimpleSwitch13(app_manager.RyuApp):
             match = parser.OFPMatch(in_port=in_port, eth_dst=dst, eth_src=src)
             # If we do not forward the packet (because we send our own NS back i.e.)
             if forward_packet == False:
-                self.add_flow(datapath, 1, match, actions, cookie=cookie)
+                self.add_flow(datapath, 1, match, actions, cookie=cookie, timeout=timeout)
                 return
             # verify if we have a valid buffer_id, if yes avoid to send both
             # flow_mod & packet_out
             if msg.buffer_id != ofproto.OFP_NO_BUFFER:
-                self.add_flow(datapath, 1, match, actions, msg.buffer_id, cookie=cookie)
+                self.add_flow(datapath, 1, match, actions, msg.buffer_id, cookie=cookie, timeout=timeout)
                 return
             else:
-                self.add_flow(datapath, 1, match, actions, cookie=cookie)
+                self.add_flow(datapath, 1, match, actions, cookie=cookie, timeout=timeout)
         data = None
         if msg.buffer_id == ofproto.OFP_NO_BUFFER:
             data = msg.data
@@ -271,14 +259,11 @@ class SimpleSwitch13(app_manager.RyuApp):
         else:
             self.logger.info("Cache miss, generating NS.")
             self.statistics['cache_miss_count'] += 1
-            # TODO: Should mac be learned on cache miss?
             ns = self._create_ns(ipv6_dst, dst, src_ip=ipv6_src, src_mac=src, tgt_ip=icmpv6_tgt)
             self.logger.info("NS looks like this:")
             self.logger.info(ns.show())
             self._send_packet(ns, dpid=dpid)
             self.logger.info("NS sent")
-        # TODO: Should we only learn MAC on NA? Here we create a flow but do not create a cache entry
-        # self._learn_mac_send(dpid, src, dst, in_port, msg, forward_packet=False)
 
     def _is_for_router(self, dst):
         if dst == router_mac:
@@ -406,8 +391,3 @@ class SimpleSwitch13(app_manager.RyuApp):
                                   buffer_id=ofproto.OFP_NO_BUFFER,
                                   in_port=ofproto.OFPP_CONTROLLER, actions=actions, data=ps)
         datapath.send_msg(out)
-
-    def _print_events(self):
-        self.logger.info("Printing queue...")
-        for ev in list(self.events.queue):
-            print(ev)

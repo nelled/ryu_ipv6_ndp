@@ -26,6 +26,7 @@ class CacheManager(SimpleSwitch13):
     def __init__(self, *args, **kwargs):
         super(CacheManager, self).__init__(*args, **kwargs)
         self.ra_thread = hub.spawn(self._cache_check)
+        self.cache_entry_timeout = cache_entry_timeout
 
     # Wrapper for cyclic checking for dead entries
     def _cache_check(self):
@@ -39,7 +40,7 @@ class CacheManager(SimpleSwitch13):
         self.logger.info("Deleting old entries...")
         to_delete = []
         for entry in self.neighbor_cache.entries.values.keys():
-            if entry.last_updated >= cache_entry_timeout and entry.status == 'STALE':
+            if entry.get_age() >= self.cache_entry_timeout and entry.status == 'STALE':
                 to_delete.append(entry)
         for entry in to_delete:
             self.neighbor_cache.delete_entry_by_entry(entry)

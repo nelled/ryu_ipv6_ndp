@@ -4,7 +4,7 @@ from nc.cache_entry import CacheEntry
 from nc.multi_dict import MultiDict
 
 
-class MultiDictTest(unittest.TestCase):
+class TestMultiDict(unittest.TestCase):
 
     def test_add_entry_simple(self):
         d = MultiDict()
