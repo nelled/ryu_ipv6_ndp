@@ -13,9 +13,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from collections import defaultdict, deque, Iterable
+from time import time, ctime
 import json
-from collections import defaultdict
-from time import time
 
 from ryu.app.wsgi import ControllerBase, WSGIApplication, route
 from ryu.base import app_manager
@@ -27,7 +27,7 @@ from ryu.ofproto import ofproto_v1_3
 from scapy import all as scapy
 from webob import Response
 
-from config import router_mac, rule_idle_timeout, router_dns
+from config import router_mac, rule_idle_timeout, router_dns, max_msg_buf_len
 from helpers import mac2ipv6, make_sn_mc
 from nc.neighbor_cache import NeighborCache
 
@@ -53,12 +53,34 @@ class NdpProxy(app_manager.RyuApp):
         self.neighbor_cache = NeighborCache()
         self.logger.info("Neighbor Cache Created")
         self.statistics = {'cache_miss_count': 0,
-                           'router_ads': defaultdict(lambda: defaultdict(list))
+                           133: defaultdict(lambda: defaultdict(lambda: deque(maxlen=max_msg_buf_len))),
+                           134: defaultdict(lambda: defaultdict(lambda: deque(maxlen=max_msg_buf_len))),
+                           135: defaultdict(lambda: defaultdict(lambda: deque(maxlen=max_msg_buf_len))),
+                           136: defaultdict(lambda: defaultdict(lambda: deque(maxlen=max_msg_buf_len))),
+                           137: defaultdict(lambda: defaultdict(lambda: deque(maxlen=max_msg_buf_len)))
+
                            }
+        self.write_pcap = {'all': False,
+                           'generated': False}
 
         wsgi = kwargs['wsgi']
         wsgi.register(NdpProxyController,
                       {ndp_proxy_instance_name: self})
+
+    def get_stats_dict(self):
+        return self._to_dict(self.statistics)
+
+    def _to_dict(self, data):
+        d = {}
+        for k, v in data.items():
+            if not isinstance(v, dict):
+                if not isinstance(v, Iterable):
+                    d[k] = v
+                else:
+                    d[k] = list(v)
+            else:
+                d[k] = self._to_dict(v)
+        return d
 
     @set_ev_cls(ofp_event.EventOFPStateChange,
                 [MAIN_DISPATCHER, DEAD_DISPATCHER])
@@ -225,18 +247,23 @@ class NdpProxy(app_manager.RyuApp):
 
     def _ndp_packet_handler(self, dpid, src, dst, in_port, cookie, msg):
         if cookie == 133:
+            self.statistics[cookie][dpid][in_port].append((src, ctime(time())))
             self._rs_handler(dpid, src, dst, in_port, cookie, msg)
 
         if cookie == 134:
+            self.statistics[cookie][dpid][in_port].append((src, ctime(time())))
             self._ra_handler(dpid, src, dst, in_port, cookie, msg)
 
         if cookie == 135:
+            self.statistics[cookie][dpid][in_port].append((src, ctime(time())))
             self._ns_handler(dpid, src, dst, in_port, cookie, msg)
 
         if cookie == 136:
+            self.statistics[cookie][dpid][in_port].append((src, ctime(time())))
             self._na_handler(dpid, src, dst, in_port, cookie, msg)
 
         if cookie == 137:
+            self.statistics[cookie][dpid][in_port].append((src, ctime(time())))
             self._rm_handler(dpid, src, dst, in_port, cookie, msg)
 
     def _rs_handler(self, dpid, src, dst, in_port, cookie, msg):
@@ -247,7 +274,7 @@ class NdpProxy(app_manager.RyuApp):
     def _ra_handler(self, dpid, src, dst, in_port, cookie, msg):
         # Log and do not forward, only controller emits RAs
         self.logger.info(ICMPv6_CODES[cookie] + ": %s %s %s %s cookie=%d", dpid, src, dst, in_port, cookie)
-        self.statistics['router_ads'][dpid][in_port].append((src, time()))
+
 
 
     def _ns_handler(self, dpid, src, dst, in_port, cookie, msg):
@@ -428,15 +455,37 @@ class NdpProxyController(ControllerBase):
 
     @route('ndp_proxy', url + '/write-pcap', methods=['PUT'])
     def set_write_pcap(self, req, **kwargs):
-        pass
+        ndp_proxy = self.ndp_proxy_app
+        try:
+            req_dict = dict(req.json) if req.body else {}
+        except ValueError:
+            raise Response(status=400)
 
-    @route('ndp_proxy', url + '/write-pcap-generated', methods=['PUT'])
-    def set_write_pcap_generated(self, req, **kwargs):
-        pass
+        try:
+            ndp_proxy.write_pcap['all'] = bool(req_dict['all'])
+            ndp_proxy.write_pcap['generated'] = bool(req_dict['generated'])
+        except KeyError:
+            raise Response(status=400)
+
+        body = json.dumps(ndp_proxy.write_pcap)
+
+        return Response(content_type='application/json', text=body)
+
+
+
+
+
 
     @route('ndp_proxy', url + '/get-active', methods=['GET'])
     def get_active_hosts(self, req, **kwargs):
         ndp_proxy = self.ndp_proxy_app
         table = json.dumps(ndp_proxy.neighbor_cache.get_active_dict())
+        return Response(content_type='application/json', text=table)
+
+    @route('ndp_proxy', url + '/get-stats', methods=['GET'])
+    def get_stats(self, req, **kwargs):
+        ndp_proxy = self.ndp_proxy_app
+        d = ndp_proxy.get_stats_dict()
+        table = json.dumps(d)
         return Response(content_type='application/json', text=table)
 
