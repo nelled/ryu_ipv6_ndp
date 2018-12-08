@@ -13,23 +13,26 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from collections import defaultdict, deque, Iterable
-from time import time, ctime
 import json
+from collections import defaultdict, deque, Iterable
+from time import time, ctime, strftime, gmtime
 
 from ryu.app.wsgi import ControllerBase, WSGIApplication, route
 from ryu.base import app_manager
 from ryu.controller import ofp_event
 from ryu.controller.handler import CONFIG_DISPATCHER, MAIN_DISPATCHER, DEAD_DISPATCHER
 from ryu.controller.handler import set_ev_cls
+from ryu.lib import pcaplib
 from ryu.lib.packet import ether_types, ethernet, packet, ipv6
 from ryu.ofproto import ofproto_v1_3
 from scapy import all as scapy
 from webob import Response
 
-from config import router_mac, rule_idle_timeout, router_dns, max_msg_buf_len
+from config import router_mac, rule_idle_timeout, router_dns, max_msg_buf_len, pcap_path
 from helpers import mac2ipv6, make_sn_mc
 from nc.neighbor_cache import NeighborCache
+
+from scapy.utils import PcapWriter
 
 ICMPv6_CODES = {133: 'Router Solicitation',
                 134: 'Router Advertisement',
@@ -63,9 +66,20 @@ class NdpProxy(app_manager.RyuApp):
         self.write_pcap = {'all': False,
                            'generated': False}
 
+        self.write_pcap_all_handle = None
+        self.write_pcap_all_writer = None
+        self.write_pcap_generated_handle = None
+        self.write_pcap_generated_writer = None
+        self.pcap_all_path = self._make_pcap_path('all_')
+        self.pcap_generated_path = self._make_pcap_path('generated_')
+
         wsgi = kwargs['wsgi']
         wsgi.register(NdpProxyController,
                       {ndp_proxy_instance_name: self})
+
+    def _make_pcap_path(self, prefix):
+        time_string = strftime('%Y%m%d_%H%M%S', gmtime())
+        return pcap_path + '/' + prefix + time_string + '.pcap'
 
     def get_stats_dict(self):
         return self._to_dict(self.statistics)
@@ -145,6 +159,7 @@ class NdpProxy(app_manager.RyuApp):
             self.logger.debug("packet truncated: only %s of %s bytes",
                               ev.msg.msg_len, ev.msg.total_len)
         msg = ev.msg
+        self._write_pcap_all(msg)
         datapath = msg.datapath
         ofproto = datapath.ofproto
         in_port = msg.match['in_port']
@@ -274,8 +289,6 @@ class NdpProxy(app_manager.RyuApp):
     def _ra_handler(self, dpid, src, dst, in_port, cookie, msg):
         # Log and do not forward, only controller emits RAs
         self.logger.info(ICMPv6_CODES[cookie] + ": %s %s %s %s cookie=%d", dpid, src, dst, in_port, cookie)
-
-
 
     def _ns_handler(self, dpid, src, dst, in_port, cookie, msg):
         self.logger.info(ICMPv6_CODES[cookie] + ": %s %s %s %s cookie=%d", dpid, src, dst, in_port, cookie)
@@ -418,6 +431,8 @@ class NdpProxy(app_manager.RyuApp):
         for dp in datapaths:
             self._send_on_dp(pkt, dp)
 
+        self._write_pcap_generated(pkt)
+
     def _send_on_dp(self, pkt, dpid):
         datapath = self.datapaths[dpid]
         ofproto = datapath.ofproto
@@ -433,6 +448,40 @@ class NdpProxy(app_manager.RyuApp):
                                   buffer_id=ofproto.OFP_NO_BUFFER,
                                   in_port=ofproto.OFPP_CONTROLLER, actions=actions, data=ps)
         datapath.send_msg(out)
+
+    def _toggle_write_pcap(self):
+        if self.write_pcap['all']:
+            if not self.write_pcap_all_writer:
+                self.write_pcap_all_handle = open(self.pcap_all_path, 'ab')
+                self.write_pcap_all_writer = pcaplib.Writer(self.write_pcap_all_handle)
+        else:
+            try:
+                self.write_pcap_all_handle.close()
+                self.write_pcap_all_writer = None
+            except AttributeError:
+                self.logger.info("Something went wrong in write_pcap_all.")
+        if self.write_pcap['generated']:
+            if not self.write_pcap_generated_writer:
+                #self.write_pcap_generated_handle = open(self.pcap_generated_path, 'ab')
+                self.write_pcap_generated_writer = PcapWriter(self.pcap_generated_path, append=True, sync=True)
+            else:
+                try:
+                    self.write_pcap_generated_writer.close()
+                    self.write_pcap_generated_writer = None
+                except AttributeError:
+                    self.logger.info("Something went wrong in write_pcap_generated.")
+
+
+    def _write_pcap_all(self, msg):
+        if self.write_pcap_all_writer:
+            print("writing")
+            self.write_pcap_all_writer.write_pkt(msg.data)
+            self.write_pcap_all_handle.flush()
+
+    def _write_pcap_generated(self, msg):
+        if self.write_pcap_generated_writer:
+            print("writing")
+            self.write_pcap_generated_writer.write(msg)
 
 
 class NdpProxyController(ControllerBase):
@@ -467,14 +516,11 @@ class NdpProxyController(ControllerBase):
         except KeyError:
             raise Response(status=400)
 
+        ndp_proxy._toggle_write_pcap()
+
         body = json.dumps(ndp_proxy.write_pcap)
 
         return Response(content_type='application/json', text=body)
-
-
-
-
-
 
     @route('ndp_proxy', url + '/get-active', methods=['GET'])
     def get_active_hosts(self, req, **kwargs):
@@ -488,4 +534,3 @@ class NdpProxyController(ControllerBase):
         d = ndp_proxy.get_stats_dict()
         table = json.dumps(d)
         return Response(content_type='application/json', text=table)
-

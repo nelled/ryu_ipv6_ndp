@@ -18,4 +18,5 @@ nosetests.xml
 .idea
 /.eggs*
 /.fuse*
+*.pcap
 
