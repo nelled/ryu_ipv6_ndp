@@ -30,6 +30,7 @@ class RaSender(CacheManager):
     def __init__(self, *args, **kwargs):
         super(RaSender, self).__init__(*args, **kwargs)
         self.ra_thread = hub.spawn(self._cyclic_ra)
+        self.logger.info("Ra sender running...")
 
     def _cyclic_ra(self):
         while True:

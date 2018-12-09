@@ -12,6 +12,13 @@
 # implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+################################
+################################
+# TODO: Refactor writer, check whether scapy writer also can handle ryu parsed messages in order to avoid using two different approaches
+# TODO: Refactor code, put rest controller in different file
+# TODO: Refactor code, put static methods in helper file
+# TODO: Introduce own logging with decorators? Or just rely on pcap output
+# TODO: Look into meter tables in order to prevent flooding https://github.com/vanhauser-thc/thc-ipv6
 
 import json
 from collections import defaultdict, deque, Iterable
@@ -77,7 +84,10 @@ class NdpProxy(app_manager.RyuApp):
         wsgi.register(NdpProxyController,
                       {ndp_proxy_instance_name: self})
 
-    def _make_pcap_path(self, prefix):
+        self.logger.info("NDP proxy running...")
+
+    @staticmethod
+    def _make_pcap_path(prefix):
         time_string = strftime('%Y%m%d_%H%M%S', gmtime())
         return pcap_path + '/' + prefix + time_string + '.pcap'
 
@@ -159,7 +169,9 @@ class NdpProxy(app_manager.RyuApp):
             self.logger.debug("packet truncated: only %s of %s bytes",
                               ev.msg.msg_len, ev.msg.total_len)
         msg = ev.msg
+
         self._write_pcap_all(msg)
+
         datapath = msg.datapath
         ofproto = datapath.ofproto
         in_port = msg.match['in_port']
@@ -352,7 +364,8 @@ class NdpProxy(app_manager.RyuApp):
     def _addr_in_cache(self, ip):
         return self.neighbor_cache.get_entry(ip)
 
-    def _create_na(self, src_ip, dst_ip, src_mac, dst_mac, r=0, s=1):
+    @staticmethod
+    def _create_na(src_ip, dst_ip, src_mac, dst_mac, r=0, s=1):
         # Advertisement
         ether_head = scapy.Ether(dst=dst_mac, src=src_mac)
         ipv6_head = scapy.IPv6(src=src_ip, dst=dst_ip)
@@ -365,7 +378,8 @@ class NdpProxy(app_manager.RyuApp):
         return adv
 
     # TODO: Put this in wiki, Thomas' code did not work because no ether_head and possibly no prefix info
-    def _create_ns(self, dst_ip, dst_mac, src_ip=None, src_mac=None, tgt_ip=None):
+    @staticmethod
+    def _create_ns(dst_ip, dst_mac, src_ip=None, src_mac=None, tgt_ip=None):
         # Solicitation
         if src_ip is None:
             src_ip = mac2ipv6(router_mac)
@@ -384,17 +398,8 @@ class NdpProxy(app_manager.RyuApp):
 
         return sol
 
-    def _send_ra(self, dpid=None, dst=None):
-        if not dst:
-            dst = '33:33:00:00:00:01'
-        self.logger.info('Sending RA to: %s', dst)
-        ra = self._create_ra(dst=dst)
-        self.logger.info('RA looks like this:')
-        ra.show()
-        self._send_packet(ra, dpid)
-        self.logger.info('RA sent.')
-
-    def _create_ra(self, dst=None):
+    @staticmethod
+    def _create_ra(dst=None):
         ether_head = scapy.Ether(src=router_mac, dst=dst)
         ipv6_head = scapy.IPv6()
         ipv6_head.dest = 'ff02::1'
@@ -418,6 +423,16 @@ class NdpProxy(app_manager.RyuApp):
 
         ra = (ether_head / ipv6_head / ipv6_ra / ipv6_nd_pref / o_route / o_rdns / o_mac)
         return ra
+
+    def _send_ra(self, dpid=None, dst=None):
+        if not dst:
+            dst = '33:33:00:00:00:01'
+        self.logger.info('Sending RA to: %s', dst)
+        ra = self._create_ra(dst=dst)
+        self.logger.info('RA looks like this:')
+        ra.show()
+        self._send_packet(ra, dpid)
+        self.logger.info('RA sent.')
 
     def _send_packet(self, pkt, dpid=None):
         # If specific dpid
@@ -450,6 +465,10 @@ class NdpProxy(app_manager.RyuApp):
         datapath.send_msg(out)
 
     def _toggle_write_pcap(self):
+        self._toggle_write_pcap_all()
+        self._toggle_write_pcap_generated()
+
+    def _toggle_write_pcap_all(self):
         if self.write_pcap['all']:
             if not self.write_pcap_all_writer:
                 self.write_pcap_all_handle = open(self.pcap_all_path, 'ab')
@@ -458,19 +477,21 @@ class NdpProxy(app_manager.RyuApp):
             try:
                 self.write_pcap_all_handle.close()
                 self.write_pcap_all_writer = None
+                self.logger.info("Writing all turned off.")
             except AttributeError:
-                self.logger.info("Something went wrong in write_pcap_all.")
+                pass
+
+    def _toggle_write_pcap_generated(self):
         if self.write_pcap['generated']:
             if not self.write_pcap_generated_writer:
-                #self.write_pcap_generated_handle = open(self.pcap_generated_path, 'ab')
                 self.write_pcap_generated_writer = PcapWriter(self.pcap_generated_path, append=True, sync=True)
-            else:
-                try:
-                    self.write_pcap_generated_writer.close()
-                    self.write_pcap_generated_writer = None
-                except AttributeError:
-                    self.logger.info("Something went wrong in write_pcap_generated.")
-
+        else:
+            try:
+                self.write_pcap_generated_writer.close()
+                self.write_pcap_generated_writer = None
+                self.logger.info("Writing generated turned off.")
+            except AttributeError:
+                pass
 
     def _write_pcap_all(self, msg):
         if self.write_pcap_all_writer:

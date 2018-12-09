@@ -27,6 +27,7 @@ class CacheManager(NdpProxy):
         super(CacheManager, self).__init__(*args, **kwargs)
         self.ra_thread = hub.spawn(self._cache_check)
         self.cache_entry_timeout = cache_entry_timeout
+        self.logger.info("Cache manager running...")
 
     # Wrapper for cyclic checking for dead entries
     def _cache_check(self):
