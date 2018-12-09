@@ -17,12 +17,6 @@ class NdpProxyController(ControllerBase):
         table = json.dumps(ndp_proxy.neighbor_cache.get_all_dict())
         return Response(content_type='application/json', text=table)
 
-    @route('ndp_proxy', rest_base_url + '/ra-table', methods=['GET'])
-    def get_ra_table(self, req, **kwargs):
-        ndp_proxy = self.ndp_proxy_app
-        table = json.dumps(ndp_proxy.statistics['router_ads'])
-        return Response(content_type='application/json', text=table)
-
     @route('ndp_proxy', rest_base_url + '/write-pcap', methods=['PUT'])
     def set_write_pcap(self, req, **kwargs):
         ndp_proxy = self.ndp_proxy_app
