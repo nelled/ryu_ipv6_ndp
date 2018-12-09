@@ -15,16 +15,13 @@
 ################################
 ################################
 # TODO: Refactor writer, check whether scapy writer also can handle ryu parsed messages in order to avoid using two different approaches
-# TODO: Refactor code, put rest controller in different file
-# TODO: Refactor code, put static methods in helper file
 # TODO: Introduce own logging with decorators? Or just rely on pcap output
 # TODO: Look into meter tables in order to prevent flooding https://github.com/vanhauser-thc/thc-ipv6
 
-import json
 from collections import defaultdict, deque, Iterable
 from time import time, ctime, strftime, gmtime
 
-from ryu.app.wsgi import ControllerBase, WSGIApplication, route
+from ryu.app.wsgi import WSGIApplication
 from ryu.base import app_manager
 from ryu.controller import ofp_event
 from ryu.controller.handler import CONFIG_DISPATCHER, MAIN_DISPATCHER, DEAD_DISPATCHER
@@ -32,14 +29,13 @@ from ryu.controller.handler import set_ev_cls
 from ryu.lib import pcaplib
 from ryu.lib.packet import ether_types, ethernet, packet, ipv6
 from ryu.ofproto import ofproto_v1_3
-from scapy import all as scapy
-from webob import Response
-
-from config import router_mac, rule_idle_timeout, router_dns, max_msg_buf_len, pcap_path
-from helpers import mac2ipv6, make_sn_mc
-from nc.neighbor_cache import NeighborCache
-
 from scapy.utils import PcapWriter
+
+from config import router_mac, rule_idle_timeout, max_msg_buf_len, pcap_path, ndp_proxy_instance_name
+from nc.neighbor_cache import NeighborCache
+from ndp_proxy_controller import NdpProxyController
+from ndp_proxy_pcap_writer import NdpProxyPcapWriter
+from packet_creator import create_na, create_ns, create_ra
 
 ICMPv6_CODES = {133: 'Router Solicitation',
                 134: 'Router Advertisement',
@@ -47,9 +43,6 @@ ICMPv6_CODES = {133: 'Router Solicitation',
                 136: 'Neighbor Advertisement',
                 137: 'Redirect'
                 }
-
-ndp_proxy_instance_name = 'ndp_proxy'
-url = '/ndp-proxy'
 
 
 class NdpProxy(app_manager.RyuApp):
@@ -68,17 +61,9 @@ class NdpProxy(app_manager.RyuApp):
                            135: defaultdict(lambda: defaultdict(lambda: deque(maxlen=max_msg_buf_len))),
                            136: defaultdict(lambda: defaultdict(lambda: deque(maxlen=max_msg_buf_len))),
                            137: defaultdict(lambda: defaultdict(lambda: deque(maxlen=max_msg_buf_len)))
-
                            }
-        self.write_pcap = {'all': False,
-                           'generated': False}
 
-        self.write_pcap_all_handle = None
-        self.write_pcap_all_writer = None
-        self.write_pcap_generated_handle = None
-        self.write_pcap_generated_writer = None
-        self.pcap_all_path = self._make_pcap_path('all_')
-        self.pcap_generated_path = self._make_pcap_path('generated_')
+        self.pcap_writer = NdpProxyPcapWriter()
 
         wsgi = kwargs['wsgi']
         wsgi.register(NdpProxyController,
@@ -86,10 +71,26 @@ class NdpProxy(app_manager.RyuApp):
 
         self.logger.info("NDP proxy running...")
 
+
     @staticmethod
-    def _make_pcap_path(prefix):
-        time_string = strftime('%Y%m%d_%H%M%S', gmtime())
-        return pcap_path + '/' + prefix + time_string + '.pcap'
+    def _is_for_router(dst):
+        if dst == router_mac:
+            return True
+        else:
+            return False
+
+    # Takes msg and returns src, dst, and icmpv6 tgt
+    @staticmethod
+    def _extract_addr(msg):
+        pkt = packet.Packet(msg.data)
+        ipv6_header = pkt.get_protocol(ipv6.ipv6)
+        # TODO: make this safer, is there a possibility that data is of wrong format or pkt does not have the element?
+        icmpv6_header = pkt[2].data
+        ipv6_dst = ipv6_header.dst
+        ipv6_src = ipv6_header.src
+        icmpv6_tgt = icmpv6_header.dst
+
+        return ipv6_dst, ipv6_src, icmpv6_tgt
 
     def get_stats_dict(self):
         return self._to_dict(self.statistics)
@@ -141,7 +142,8 @@ class NdpProxy(app_manager.RyuApp):
             match = parser.OFPMatch(eth_type=0x86dd, ip_proto=58, icmpv6_type=icmp_code)
             self.add_flow(datapath, 10, match, actions, cookie=icmp_code, timeout=0)
 
-    def add_flow(self, datapath, priority, match, actions, buffer_id=None, cookie=0, timeout=rule_idle_timeout):
+    @staticmethod
+    def add_flow(datapath, priority, match, actions, buffer_id=None, cookie=0, timeout=rule_idle_timeout):
         print("Added flow for: " + str(match))
         ofproto = datapath.ofproto
         parser = datapath.ofproto_parser
@@ -170,7 +172,7 @@ class NdpProxy(app_manager.RyuApp):
                               ev.msg.msg_len, ev.msg.total_len)
         msg = ev.msg
 
-        self._write_pcap_all(msg)
+        self.pcap_writer.write_pcap_all(msg)
 
         datapath = msg.datapath
         ofproto = datapath.ofproto
@@ -310,7 +312,7 @@ class NdpProxy(app_manager.RyuApp):
         is_for_router = self._is_for_router(dst)
         if cache_entry:
             self.logger.info("Cache hit, responding with our own NA.")
-            na = self._create_na(ipv6_src, ipv6_dst, src, dst)
+            na = create_na(ipv6_src, ipv6_dst, src, dst)
             self.logger.info("NA looks like this:")
             self.logger.info(na.show())
             self._send_packet(na, dpid=dpid)
@@ -318,7 +320,7 @@ class NdpProxy(app_manager.RyuApp):
         if is_for_router:
             self.logger.info("Received NS for router, responding with our own NA.")
             # Reverse src and dst in signature here
-            na = self._create_na(ipv6_dst, ipv6_src, dst, src, r=1)
+            na = create_na(ipv6_dst, ipv6_src, dst, src, r=1)
             self.logger.info("NA looks like this:")
             self.logger.info(na.show())
             self._send_packet(na, dpid=dpid)
@@ -326,29 +328,11 @@ class NdpProxy(app_manager.RyuApp):
         else:
             self.logger.info("Cache miss, generating NS.")
             self.statistics['cache_miss_count'] += 1
-            ns = self._create_ns(ipv6_dst, dst, src_ip=ipv6_src, src_mac=src, tgt_ip=icmpv6_tgt)
+            ns = create_ns(ipv6_dst, dst, src_ip=ipv6_src, src_mac=src, tgt_ip=icmpv6_tgt)
             self.logger.info("NS looks like this:")
             self.logger.info(ns.show())
             self._send_packet(ns, dpid=dpid)
             self.logger.info("NS sent")
-
-    def _is_for_router(self, dst):
-        if dst == router_mac:
-            return True
-        else:
-            return False
-
-    # Takes msg and returns src, dst, and icmpv6 tgt
-    def _extract_addr(self, msg):
-        pkt = packet.Packet(msg.data)
-        ipv6_header = pkt.get_protocol(ipv6.ipv6)
-        # TODO: make this safer, is there a possibility that data is of wrong format or pkt does not have the element?
-        icmpv6_header = pkt[2].data
-        ipv6_dst = ipv6_header.dst
-        ipv6_src = ipv6_header.src
-        icmpv6_tgt = icmpv6_header.dst
-
-        return ipv6_dst, ipv6_src, icmpv6_tgt
 
     def _na_handler(self, dpid, src, dst, in_port, cookie, msg):
         self.logger.info(ICMPv6_CODES[cookie] + ": %s %s %s %s cookie=%d", dpid, src, dst, in_port, cookie)
@@ -364,71 +348,11 @@ class NdpProxy(app_manager.RyuApp):
     def _addr_in_cache(self, ip):
         return self.neighbor_cache.get_entry(ip)
 
-    @staticmethod
-    def _create_na(src_ip, dst_ip, src_mac, dst_mac, r=0, s=1):
-        # Advertisement
-        ether_head = scapy.Ether(dst=dst_mac, src=src_mac)
-        ipv6_head = scapy.IPv6(src=src_ip, dst=dst_ip)
-        icmpv6_ns = scapy.ICMPv6ND_NA(tgt=src_ip, R=r, S=s)
-        icmpv6_opt_pref = scapy.ICMPv6NDOptPrefixInfo()
-        # Is this the address the answer will be sent to?
-        llSrcAdd = scapy.ICMPv6NDOptSrcLLAddr(lladdr=src_mac)
-        adv = (ether_head / ipv6_head / icmpv6_ns / icmpv6_opt_pref / llSrcAdd)
-
-        return adv
-
-    # TODO: Put this in wiki, Thomas' code did not work because no ether_head and possibly no prefix info
-    @staticmethod
-    def _create_ns(dst_ip, dst_mac, src_ip=None, src_mac=None, tgt_ip=None):
-        # Solicitation
-        if src_ip is None:
-            src_ip = mac2ipv6(router_mac)
-        if src_mac is None:
-            src_mac = router_mac
-        if tgt_ip is None:
-            tgt_ip = dst_ip
-        ether_head = scapy.Ether(dst=dst_mac, src=src_mac)
-        # With solicited node multicast
-        ipv6_head = scapy.IPv6(src=src_ip, dst=make_sn_mc(dst_ip))
-        # Global address
-        icmpv6_ns = scapy.ICMPv6ND_NS(tgt=tgt_ip)
-        icmpv6_opt_pref = scapy.ICMPv6NDOptSrcLLAddr(lladdr=src_mac)
-
-        sol = (ether_head / ipv6_head / icmpv6_ns / icmpv6_opt_pref)
-
-        return sol
-
-    @staticmethod
-    def _create_ra(dst=None):
-        ether_head = scapy.Ether(src=router_mac, dst=dst)
-        ipv6_head = scapy.IPv6()
-        ipv6_head.dest = 'ff02::1'
-        ipv6_head.src = mac2ipv6(router_mac)
-        ipv6_ra = scapy.ICMPv6ND_RA()
-        ipv6_nd_pref = scapy.ICMPv6NDOptPrefixInfo()
-        ipv6_nd_pref.prefix = '2001:db8:1::'
-        ipv6_nd_pref.prefixlen = 64
-        ipv6_nd_pref.validlifetime = 7200  # Valid-Lifetime 2h
-        ipv6_nd_pref.preferredlifetime = 1800  # Prefered-Lifetime 30min
-        o_route = scapy.ICMPv6NDOptRouteInfo()  # ICMPv6-Option: Route Information
-        o_route.prefix = '::'  # Default Route
-        o_route.plen = 0  # Prefix length in bit
-        o_route.rtlifetime = 1800  # Same value as the Prefered-Lifetime of the Router
-        o_rdns = scapy.ICMPv6NDOptRDNSS()  # ICMPv6-Option: Recursive DNS Server
-        o_rdns.dns = router_dns  # List of DNS Server Addresses
-        o_rdns.lifetime = 1800  # Same value as the Prefered-Lifetime of the Router
-
-        o_mac = scapy.ICMPv6NDOptSrcLLAddr()  # ICMPv6-Option: Source Link Layer Address
-        o_mac.lladdr = router_mac  # MAC address
-
-        ra = (ether_head / ipv6_head / ipv6_ra / ipv6_nd_pref / o_route / o_rdns / o_mac)
-        return ra
-
     def _send_ra(self, dpid=None, dst=None):
         if not dst:
             dst = '33:33:00:00:00:01'
         self.logger.info('Sending RA to: %s', dst)
-        ra = self._create_ra(dst=dst)
+        ra = create_ra(dst=dst)
         self.logger.info('RA looks like this:')
         ra.show()
         self._send_packet(ra, dpid)
@@ -446,13 +370,14 @@ class NdpProxy(app_manager.RyuApp):
         for dp in datapaths:
             self._send_on_dp(pkt, dp)
 
-        self._write_pcap_generated(pkt)
+        self.pcap_writer.write_pcap_generated(pkt)
 
     def _send_on_dp(self, pkt, dpid):
         datapath = self.datapaths[dpid]
         ofproto = datapath.ofproto
         parser = datapath.ofproto_parser
         ps = bytes(pkt)
+        # TODO: There is an exception here sometimes, KeyError with dpid. How is that?
         if pkt['Ether'].dst in self.mac_to_port[dpid]:
             out_port = self.mac_to_port[dpid][pkt['Ether'].dst]
         else:
@@ -463,95 +388,3 @@ class NdpProxy(app_manager.RyuApp):
                                   buffer_id=ofproto.OFP_NO_BUFFER,
                                   in_port=ofproto.OFPP_CONTROLLER, actions=actions, data=ps)
         datapath.send_msg(out)
-
-    def _toggle_write_pcap(self):
-        self._toggle_write_pcap_all()
-        self._toggle_write_pcap_generated()
-
-    def _toggle_write_pcap_all(self):
-        if self.write_pcap['all']:
-            if not self.write_pcap_all_writer:
-                self.write_pcap_all_handle = open(self.pcap_all_path, 'ab')
-                self.write_pcap_all_writer = pcaplib.Writer(self.write_pcap_all_handle)
-        else:
-            try:
-                self.write_pcap_all_handle.close()
-                self.write_pcap_all_writer = None
-                self.logger.info("Writing all turned off.")
-            except AttributeError:
-                pass
-
-    def _toggle_write_pcap_generated(self):
-        if self.write_pcap['generated']:
-            if not self.write_pcap_generated_writer:
-                self.write_pcap_generated_writer = PcapWriter(self.pcap_generated_path, append=True, sync=True)
-        else:
-            try:
-                self.write_pcap_generated_writer.close()
-                self.write_pcap_generated_writer = None
-                self.logger.info("Writing generated turned off.")
-            except AttributeError:
-                pass
-
-    def _write_pcap_all(self, msg):
-        if self.write_pcap_all_writer:
-            print("writing")
-            self.write_pcap_all_writer.write_pkt(msg.data)
-            self.write_pcap_all_handle.flush()
-
-    def _write_pcap_generated(self, msg):
-        if self.write_pcap_generated_writer:
-            print("writing")
-            self.write_pcap_generated_writer.write(msg)
-
-
-class NdpProxyController(ControllerBase):
-
-    def __init__(self, req, link, data, **config):
-        super(NdpProxyController, self).__init__(req, link, data, **config)
-        self.ndp_proxy_app = data[ndp_proxy_instance_name]
-
-    @route('ndp_proxy', url + '/nc', methods=['GET'])
-    def list_neighbor_cache(self, req, **kwargs):
-        ndp_proxy = self.ndp_proxy_app
-        table = json.dumps(ndp_proxy.neighbor_cache.get_all_dict())
-        return Response(content_type='application/json', text=table)
-
-    @route('ndp_proxy', url + '/ra-table', methods=['GET'])
-    def get_ra_table(self, req, **kwargs):
-        ndp_proxy = self.ndp_proxy_app
-        table = json.dumps(ndp_proxy.statistics['router_ads'])
-        return Response(content_type='application/json', text=table)
-
-    @route('ndp_proxy', url + '/write-pcap', methods=['PUT'])
-    def set_write_pcap(self, req, **kwargs):
-        ndp_proxy = self.ndp_proxy_app
-        try:
-            req_dict = dict(req.json) if req.body else {}
-        except ValueError:
-            raise Response(status=400)
-
-        try:
-            ndp_proxy.write_pcap['all'] = bool(req_dict['all'])
-            ndp_proxy.write_pcap['generated'] = bool(req_dict['generated'])
-        except KeyError:
-            raise Response(status=400)
-
-        ndp_proxy._toggle_write_pcap()
-
-        body = json.dumps(ndp_proxy.write_pcap)
-
-        return Response(content_type='application/json', text=body)
-
-    @route('ndp_proxy', url + '/get-active', methods=['GET'])
-    def get_active_hosts(self, req, **kwargs):
-        ndp_proxy = self.ndp_proxy_app
-        table = json.dumps(ndp_proxy.neighbor_cache.get_active_dict())
-        return Response(content_type='application/json', text=table)
-
-    @route('ndp_proxy', url + '/get-stats', methods=['GET'])
-    def get_stats(self, req, **kwargs):
-        ndp_proxy = self.ndp_proxy_app
-        d = ndp_proxy.get_stats_dict()
-        table = json.dumps(d)
-        return Response(content_type='application/json', text=table)
