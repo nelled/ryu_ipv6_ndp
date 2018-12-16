@@ -1,6 +1,8 @@
-# from https://stackoverflow.com/questions/37140846/how-to-convert-ipv6-link-local-address-to-mac-address-in-python
-# TODO: Check if scapy has this method, it has several other tools for validity checking etc.
 from ipaddress import IPv6Address
+
+"""
+Some helpers for dealing with addresses.
+"""
 
 
 def mac2ipv6(mac):
@@ -25,13 +27,11 @@ def mac2ipv6(mac):
 def make_sn_mc(addr):
     snmc_prefix = 'FF02:0:0:0:0:1:FF'
     suffix = get_snmc_suffix(addr)
-    return snmc_prefix + suffix
+    res = snmc_prefix + suffix
+    sn_mc = IPv6Address(res).exploded
+    return sn_mc
 
 
 def get_snmc_suffix(addr):
     ip = IPv6Address(addr).exploded
     return ip[-7:]
-
-
-if __name__ == "__main__":
-    print(mac2ipv6('70:01:02:03:04:05'))

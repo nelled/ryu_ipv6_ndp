@@ -14,24 +14,20 @@
 # limitations under the License.
 ################################
 ################################
-# TODO: Refactor writer, check whether scapy writer also can handle ryu parsed messages in order to avoid using two different approaches
-# TODO: Introduce own logging with decorators? Or just rely on pcap output
 # TODO: Look into meter tables in order to prevent flooding https://github.com/vanhauser-thc/thc-ipv6
 
 from collections import defaultdict, deque, Iterable
-from time import time, ctime, strftime, gmtime
+from time import time, ctime
 
 from ryu.app.wsgi import WSGIApplication
 from ryu.base import app_manager
 from ryu.controller import ofp_event
 from ryu.controller.handler import CONFIG_DISPATCHER, MAIN_DISPATCHER, DEAD_DISPATCHER
 from ryu.controller.handler import set_ev_cls
-from ryu.lib import pcaplib
 from ryu.lib.packet import ether_types, ethernet, packet, ipv6
 from ryu.ofproto import ofproto_v1_3
-from scapy.utils import PcapWriter
 
-from config import router_mac, rule_idle_timeout, max_msg_buf_len, pcap_path, ndp_proxy_instance_name
+from config import router_mac, rule_idle_timeout, max_msg_buf_len, ndp_proxy_instance_name
 from nc.neighbor_cache import NeighborCache
 from ndp_proxy_controller import NdpProxyController
 from ndp_proxy_pcap_writer import NdpProxyPcapWriter
@@ -46,7 +42,15 @@ ICMPv6_CODES = {133: 'Router Solicitation',
 
 
 class NdpProxy(app_manager.RyuApp):
+    """
+    Ryu App implementing a NDP proxy. Acts as sink and source of all NDP messages and maintains its own
+    neighbor cache. Flows with a short timeout are installed for known neighbors and flow deleted messages
+    are used to notify the proxy that a host has not received traffic in a while. Such neighbors are marked
+    as stale.
+    """
     OFP_VERSIONS = [ofproto_v1_3.OFP_VERSION]
+
+    # Needed for REST
     _CONTEXTS = {'wsgi': WSGIApplication}
 
     def __init__(self, *args, **kwargs):
@@ -54,7 +58,7 @@ class NdpProxy(app_manager.RyuApp):
         self.datapaths = {}
         self.mac_to_port = {}
         self.neighbor_cache = NeighborCache()
-        self.logger.info("Neighbor Cache Created")
+        self.logger.info("Neighbor Cache reated.")
         self.statistics = {'cache_miss_count': 0,
                            133: defaultdict(lambda: defaultdict(lambda: deque(maxlen=max_msg_buf_len))),
                            134: defaultdict(lambda: defaultdict(lambda: deque(maxlen=max_msg_buf_len))),
@@ -63,14 +67,14 @@ class NdpProxy(app_manager.RyuApp):
                            137: defaultdict(lambda: defaultdict(lambda: deque(maxlen=max_msg_buf_len)))
                            }
 
-        self.pcap_writer = NdpProxyPcapWriter()
+        self.pcap_writer = NdpProxyPcapWriter(self.logger)
 
+        # Needed for REST
         wsgi = kwargs['wsgi']
         wsgi.register(NdpProxyController,
                       {ndp_proxy_instance_name: self})
 
         self.logger.info("NDP proxy running...")
-
 
     @staticmethod
     def _is_for_router(dst):
@@ -115,6 +119,7 @@ class NdpProxy(app_manager.RyuApp):
             if datapath.id not in self.datapaths:
                 self.logger.debug('register datapath: %016x', datapath.id)
                 self.datapaths[datapath.id] = datapath
+
         elif ev.state == DEAD_DISPATCHER:
             if datapath.id in self.datapaths:
                 self.logger.debug('unregister datapath: %016x', datapath.id)
@@ -142,9 +147,8 @@ class NdpProxy(app_manager.RyuApp):
             match = parser.OFPMatch(eth_type=0x86dd, ip_proto=58, icmpv6_type=icmp_code)
             self.add_flow(datapath, 10, match, actions, cookie=icmp_code, timeout=0)
 
-    @staticmethod
-    def add_flow(datapath, priority, match, actions, buffer_id=None, cookie=0, timeout=rule_idle_timeout):
-        print("Added flow for: " + str(match))
+    def add_flow(self, datapath, priority, match, actions, buffer_id=None, cookie=0, timeout=rule_idle_timeout):
+        self.logger.debug("Added flow for: " + str(match))
         ofproto = datapath.ofproto
         parser = datapath.ofproto_parser
 
@@ -171,7 +175,7 @@ class NdpProxy(app_manager.RyuApp):
             self.logger.debug("packet truncated: only %s of %s bytes",
                               ev.msg.msg_len, ev.msg.total_len)
         msg = ev.msg
-
+        # Write to pcap if flag set
         self.pcap_writer.write_pcap_all(msg)
 
         datapath = msg.datapath
@@ -196,17 +200,19 @@ class NdpProxy(app_manager.RyuApp):
         else:
             reason = msg.reason
 
+        # Trigger icmpv6 handling
         if msg.cookie in ICMPv6_CODES.keys():
             self._ndp_packet_handler(dpid, src, dst, in_port, msg.cookie, msg)
         else:
-            self.logger.info("Another Message: %s %s %s %s reason=%s match=%s cookie=%d ether=%d", dpid, src, dst,
+            # Other messages do not concern us
+            self.logger.debug("Another Message: %s %s %s %s reason=%s match=%s cookie=%d ether=%d", dpid, src, dst,
                              in_port, reason, msg.match, msg.cookie, eth.ethertype)
             self._learn_mac_send(dpid, src, dst, in_port, msg, timeout=0)
 
     def _learn_mac(self, dpid, src, in_port):
         self.mac_to_port[dpid][src] = in_port
 
-    # Normal behaviour outsourced to function so we can control what happens to ICMPv6 packets
+    # Forward and learn MAC, this is for non icmpv6 traffic
     def _learn_mac_send(self, dpid, src, dst, in_port, msg, cookie=0, forward_packet=True, timeout=rule_idle_timeout):
         datapath = self.datapaths[dpid]
         ofproto = datapath.ofproto
@@ -221,14 +227,14 @@ class NdpProxy(app_manager.RyuApp):
 
         actions = [parser.OFPActionOutput(out_port)]
 
-        # install a flow to avoid packet_in next time
+        # Install a flow to avoid packet_in next time
         if out_port != ofproto.OFPP_FLOOD:
             match = parser.OFPMatch(in_port=in_port, eth_dst=dst, eth_src=src)
             # If we do not forward the packet (because we send our own NS back i.e.)
             if forward_packet == False:
                 self.add_flow(datapath, 1, match, actions, cookie=cookie, timeout=timeout)
                 return
-            # verify if we have a valid buffer_id, if yes avoid to send both
+            # Verify if we have a valid buffer_id, if yes avoid to send both
             # flow_mod & packet_out
             if msg.buffer_id != ofproto.OFP_NO_BUFFER:
                 self.add_flow(datapath, 1, match, actions, msg.buffer_id, cookie=cookie, timeout=timeout)
@@ -258,8 +264,7 @@ class NdpProxy(app_manager.RyuApp):
             reason = 'GROUP DELETE'
         else:
             reason = 'unknown'
-
-        self.logger.info('OFPFlowRemoved received: '
+        self.logger.debug('OFPFlowRemoved received: '
                          'cookie=%d priority=%d reason=%s table_id=%d '
                          'duration_sec=%d duration_nsec=%d '
                          'idle_timeout=%d hard_timeout=%d '
@@ -270,7 +275,7 @@ class NdpProxy(app_manager.RyuApp):
                          msg.packet_count, msg.byte_count, msg.match)
         try:
             self.neighbor_cache.set_stale(msg.cookie)
-            print(self.neighbor_cache)
+            self.logger.info(str(self.neighbor_cache))
         except AttributeError:
             self.logger.info("Flow removed message does not concern cache.")
 
@@ -313,36 +318,31 @@ class NdpProxy(app_manager.RyuApp):
         if cache_entry:
             self.logger.info("Cache hit, responding with our own NA.")
             na = create_na(ipv6_src, ipv6_dst, src, dst)
-            self.logger.info("NA looks like this:")
-            self.logger.info(na.show())
+            self.logger.debug("NA looks like this:\n " + na.show(dump=True))
             self._send_packet(na, dpid=dpid)
-            self.logger.info("NA sent")
         if is_for_router:
             self.logger.info("Received NS for router, responding with our own NA.")
             # Reverse src and dst in signature here
             na = create_na(ipv6_dst, ipv6_src, dst, src, r=1)
-            self.logger.info("NA looks like this:")
-            self.logger.info(na.show())
+            self.logger.debug("NA looks like this:\n " + na.show(dump=True))
             self._send_packet(na, dpid=dpid)
-            self.logger.info("NA sent")
         else:
             self.logger.info("Cache miss, generating NS.")
             self.statistics['cache_miss_count'] += 1
             ns = create_ns(ipv6_dst, dst, src_ip=ipv6_src, src_mac=src, tgt_ip=icmpv6_tgt)
-            self.logger.info("NS looks like this:")
-            self.logger.info(ns.show())
+            self.logger.debug("NS looks like this:\n " + ns.show(dump=True))
             self._send_packet(ns, dpid=dpid)
-            self.logger.info("NS sent")
 
     def _na_handler(self, dpid, src, dst, in_port, cookie, msg):
         self.logger.info(ICMPv6_CODES[cookie] + ": %s %s %s %s cookie=%d", dpid, src, dst, in_port, cookie)
         pkt = packet.Packet(msg.data)
         ip6_header = pkt.get_protocol(ipv6.ipv6)
         cache_id_cookie = self.neighbor_cache.add_entry(ip6_header.src, src)
-        print(self.neighbor_cache)
+        self.logger.info(str(self.neighbor_cache))
         self._learn_mac_send(dpid, src, dst, in_port, msg, cache_id_cookie)
 
     def _rm_handler(self, dpid, src, dst, in_port, cookie, msg):
+        # Redirect messages only concern us when there are several routers
         self.logger.info(ICMPv6_CODES[cookie] + ": %s %s %s %s cookie=%d", dpid, src, dst, in_port, cookie)
 
     def _addr_in_cache(self, ip):
@@ -350,20 +350,19 @@ class NdpProxy(app_manager.RyuApp):
 
     def _send_ra(self, dpid=None, dst=None):
         if not dst:
+            # Send to all
             dst = '33:33:00:00:00:01'
         self.logger.info('Sending RA to: %s', dst)
         ra = create_ra(dst=dst)
-        self.logger.info('RA looks like this:')
-        ra.show()
+        self.logger.debug("RA looks like this:\n " + ra.show(dump=True))
         self._send_packet(ra, dpid)
-        self.logger.info('RA sent.')
 
     def _send_packet(self, pkt, dpid=None):
         # If specific dpid
         if dpid:
             datapaths = [dpid]
 
-        # Else send on all
+        # Send on all
         else:
             datapaths = self.datapaths.keys()
 
@@ -377,10 +376,12 @@ class NdpProxy(app_manager.RyuApp):
         ofproto = datapath.ofproto
         parser = datapath.ofproto_parser
         ps = bytes(pkt)
-        # TODO: There is an exception here sometimes, KeyError with dpid. How is that?
-        if pkt['Ether'].dst in self.mac_to_port[dpid]:
-            out_port = self.mac_to_port[dpid][pkt['Ether'].dst]
-        else:
+        try:
+            if pkt['Ether'].dst in self.mac_to_port[dpid]:
+                out_port = self.mac_to_port[dpid][pkt['Ether'].dst]
+            else:
+                out_port = ofproto.OFPP_FLOOD
+        except KeyError:
             out_port = ofproto.OFPP_FLOOD
 
         actions = [parser.OFPActionOutput(out_port)]

@@ -7,12 +7,22 @@ from nc.multi_dict import MultiDict
 
 
 class NeighborCache:
-    MAC_MASK = 0xFFFFFFFFFFFF
-    COUNTER_MASK = 0xFFFF000000000000
+    """
+    Class representing a neighbor cache.
+    """
+
+    # MAC_MASK = 0xFFFFFFFFFFFF
+    # COUNTER_MASK = 0xFFFF000000000000
 
     def __init__(self):
         self.entries = MultiDict()
         self.cookie_counter = 0
+
+    def __str__(self):
+        headers = ['MAC', 'IP', 'Total Age', 'Last Updated', 'Cookie', 'Status']
+        data = [[v.mac, '\n'.join(v.ips), v.get_total_age(), v.get_age(), v.get_cookie(), v.status] for v in
+                self.entries.get_entries_list()]
+        return tabulate(data, headers=headers, tablefmt='fancy_grid')
 
     def add_entry(self, ip, mac):
         entry = self.get_entry(mac)
@@ -52,17 +62,26 @@ class NeighborCache:
         entry = self.get_entry(key)
         entry.set_stale()
 
+    def get_all_dict(self):
+        return self._to_dict(self.entries.get_entries_list())
+
+    def get_active_dict(self):
+        return self._to_dict(self._get_active())
+
     def _gen_cookie(self, mac):
+        # Cookie is Counter ORed with MAC
         int_mac = self._mac_to_int(mac)
         print(int_mac)
         cookie = (self.cookie_counter << 48) | int_mac
         self.cookie_counter = (self.cookie_counter + 1 & 0xFFFF)
         return cookie
 
-    def _mac_to_int(self, mac):
+    @staticmethod
+    def _mac_to_int(mac):
         return int('0x' + mac.replace(':', ''), 16)
 
-    def _to_dict(self, l):
+    @staticmethod
+    def _to_dict(l):
         nc_dict = {v.mac: {
             'mac': v.mac,
             'ips': v.ips,
@@ -72,19 +91,9 @@ class NeighborCache:
             'status': v.status} for v in l}
         return nc_dict
 
-    def get_all_dict(self):
-        return self._to_dict(self.entries.get_entries_list())
-
-    def get_active_dict(self):
-        return self._to_dict(self._get_active())
-
     def _get_active(self):
         entries_list = self.entries.get_entries_list()
         active_entries = [v for v in entries_list if v.status == 'ACTIVE']
         return active_entries
 
-    def __str__(self):
-        headers = ['MAC', 'IP', 'Total Age', 'Last Updated', 'Cookie', 'Status']
-        data = [[v.mac, '\n'.join(v.ips), v.get_total_age(), v.get_age(), v.get_cookie(), v.status] for v in
-                self.entries.get_entries_list()]
-        return tabulate(data, headers=headers, tablefmt='fancy_grid')
+

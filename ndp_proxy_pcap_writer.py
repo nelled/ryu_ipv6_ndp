@@ -7,13 +7,29 @@ from config import pcap_path
 
 
 class NdpProxyPcapWriter:
+    """
+    Class for writing incoming respective generated packets to a *.pcap file.
+    Writing is triggered through the REST api.
+    """
 
-    def __init__(self):
+    def __init__(self, logger):
+        self.logger = logger
         self.pcap_all_path = self._make_pcap_path('all_')
         self.pcap_generated_path = self._make_pcap_path('generated_')
         self.write_pcap_all_handle = None
         self.write_pcap_all_writer = None
         self.write_pcap_generated_writer = None
+
+    def write_pcap_all(self, msg):
+        if self.write_pcap_all_writer:
+            self.logger.debug("Writing received packet...")
+            self.write_pcap_all_writer.write_pkt(msg.data)
+            self.write_pcap_all_handle.flush()
+
+    def write_pcap_generated(self, msg):
+        if self.write_pcap_generated_writer:
+            self.logger.debug("Writing generated packet...")
+            self.write_pcap_generated_writer.write(msg)
 
     @staticmethod
     def _make_pcap_path(prefix):
@@ -47,13 +63,3 @@ class NdpProxyPcapWriter:
             except AttributeError:
                 pass
 
-    def write_pcap_all(self, msg):
-        if self.write_pcap_all_writer:
-            print("Writing a received packet")
-            self.write_pcap_all_writer.write_pkt(msg.data)
-            self.write_pcap_all_handle.flush()
-
-    def write_pcap_generated(self, msg):
-        if self.write_pcap_generated_writer:
-            print("Writing a generated packet")
-            self.write_pcap_generated_writer.write(msg)
