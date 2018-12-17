@@ -25,9 +25,9 @@ from ryu.controller import ofp_event
 from ryu.controller.handler import CONFIG_DISPATCHER, MAIN_DISPATCHER, DEAD_DISPATCHER
 from ryu.controller.handler import set_ev_cls
 from ryu.lib.packet import ether_types, ethernet, packet, ipv6
-from ryu.ofproto import ofproto_v1_3
+from ryu.ofproto import ofproto_v1_3, ofproto_v1_4
 
-from config import router_mac, rule_idle_timeout, max_msg_buf_len, ndp_proxy_instance_name
+from config import router_mac, rule_idle_timeout, max_msg_buf_len, ndp_proxy_instance_name, max_rate
 from nc.neighbor_cache import NeighborCache
 from ndp_proxy_controller import NdpProxyController
 from ndp_proxy_pcap_writer import NdpProxyPcapWriter
@@ -142,18 +142,31 @@ class NdpProxy(app_manager.RyuApp):
                                           ofproto.OFPCML_NO_BUFFER)]
         self.add_flow(datapath, 0, match, actions, timeout=0)
 
+        # Create band
+        bands = [parser.OFPMeterBandDrop(rate=max_rate, burst_size=10)]
+        # Install meter request
+        req = parser.OFPMeterMod(datapath=datapath, command=ofproto.OFPMC_ADD, flags=ofproto.OFPMF_PKTPS, meter_id=2, bands=bands)
+
+        datapath.send_msg(req)
+
+        # Additional instruction to apply meter
+        inst = [parser.OFPInstructionMeter(1)]
+        #inst = None
         # Install match for all ICMPv6 messages
         for icmp_code in range(133, 137 + 1):
             match = parser.OFPMatch(eth_type=0x86dd, ip_proto=58, icmpv6_type=icmp_code)
-            self.add_flow(datapath, 10, match, actions, cookie=icmp_code, timeout=0)
+            self.add_flow(datapath, 10, match, actions, instructions=inst, cookie=icmp_code, timeout=0)
 
-    def add_flow(self, datapath, priority, match, actions, buffer_id=None, cookie=0, timeout=rule_idle_timeout):
+    def add_flow(self, datapath, priority, match, actions, instructions=None, buffer_id=None, cookie=0, timeout=rule_idle_timeout):
         self.logger.debug("Added flow for: " + str(match))
         ofproto = datapath.ofproto
         parser = datapath.ofproto_parser
 
         inst = [parser.OFPInstructionActions(ofproto.OFPIT_APPLY_ACTIONS,
                                              actions)]
+        if instructions:
+            inst = inst+instructions
+
         if buffer_id:
             mod = parser.OFPFlowMod(datapath=datapath, buffer_id=buffer_id,
                                     priority=priority, match=match,

@@ -25,3 +25,6 @@ ndp_proxy_instance_name = 'ndp_proxy'
 
 # If set to true, prints generated packets and shows more info
 verbose = False
+
+# Rate for meter at which packets will get dropped
+max_rate = 10
