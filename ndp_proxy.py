@@ -25,7 +25,7 @@ from ryu.controller import ofp_event
 from ryu.controller.handler import CONFIG_DISPATCHER, MAIN_DISPATCHER, DEAD_DISPATCHER
 from ryu.controller.handler import set_ev_cls
 from ryu.lib.packet import ether_types, ethernet, packet, ipv6
-from ryu.ofproto import ofproto_v1_3, ofproto_v1_4
+from ryu.ofproto import ofproto_v1_3
 
 from config import router_mac, rule_idle_timeout, max_msg_buf_len, ndp_proxy_instance_name, max_rate
 from nc.neighbor_cache import NeighborCache
@@ -145,19 +145,21 @@ class NdpProxy(app_manager.RyuApp):
         # Create band
         bands = [parser.OFPMeterBandDrop(rate=max_rate, burst_size=10)]
         # Install meter request
-        req = parser.OFPMeterMod(datapath=datapath, command=ofproto.OFPMC_ADD, flags=ofproto.OFPMF_PKTPS, meter_id=2, bands=bands)
+        req = parser.OFPMeterMod(datapath=datapath, command=ofproto.OFPMC_ADD, flags=ofproto.OFPMF_PKTPS, meter_id=1,
+                                 bands=bands)
 
         datapath.send_msg(req)
 
         # Additional instruction to apply meter
         inst = [parser.OFPInstructionMeter(1)]
-        #inst = None
+        # inst = None
         # Install match for all ICMPv6 messages
         for icmp_code in range(133, 137 + 1):
             match = parser.OFPMatch(eth_type=0x86dd, ip_proto=58, icmpv6_type=icmp_code)
             self.add_flow(datapath, 10, match, actions, instructions=inst, cookie=icmp_code, timeout=0)
 
-    def add_flow(self, datapath, priority, match, actions, instructions=None, buffer_id=None, cookie=0, timeout=rule_idle_timeout):
+    def add_flow(self, datapath, priority, match, actions, instructions=None, buffer_id=None, cookie=0,
+                 timeout=rule_idle_timeout):
         self.logger.debug("Added flow for: " + str(match))
         ofproto = datapath.ofproto
         parser = datapath.ofproto_parser
@@ -165,7 +167,7 @@ class NdpProxy(app_manager.RyuApp):
         inst = [parser.OFPInstructionActions(ofproto.OFPIT_APPLY_ACTIONS,
                                              actions)]
         if instructions:
-            inst = inst+instructions
+            inst = inst + instructions
 
         if buffer_id:
             mod = parser.OFPFlowMod(datapath=datapath, buffer_id=buffer_id,
@@ -219,7 +221,7 @@ class NdpProxy(app_manager.RyuApp):
         else:
             # Other messages do not concern us
             self.logger.debug("Another Message: %s %s %s %s reason=%s match=%s cookie=%d ether=%d", dpid, src, dst,
-                             in_port, reason, msg.match, msg.cookie, eth.ethertype)
+                              in_port, reason, msg.match, msg.cookie, eth.ethertype)
             self._learn_mac_send(dpid, src, dst, in_port, msg, timeout=0)
 
     def _learn_mac(self, dpid, src, in_port):
@@ -250,7 +252,7 @@ class NdpProxy(app_manager.RyuApp):
             # Verify if we have a valid buffer_id, if yes avoid to send both
             # flow_mod & packet_out
             if msg.buffer_id != ofproto.OFP_NO_BUFFER:
-                self.add_flow(datapath, 1, match, actions, msg.buffer_id, cookie=cookie, timeout=timeout)
+                self.add_flow(datapath, 1, match, actions, buffer_id=msg.buffer_id, cookie=cookie, timeout=timeout)
                 return
             else:
                 self.add_flow(datapath, 1, match, actions, cookie=cookie, timeout=timeout)
@@ -278,14 +280,14 @@ class NdpProxy(app_manager.RyuApp):
         else:
             reason = 'unknown'
         self.logger.debug('OFPFlowRemoved received: '
-                         'cookie=%d priority=%d reason=%s table_id=%d '
-                         'duration_sec=%d duration_nsec=%d '
-                         'idle_timeout=%d hard_timeout=%d '
-                         'packet_count=%d byte_count=%d match.fields=%s',
-                         msg.cookie, msg.priority, reason, msg.table_id,
-                         msg.duration_sec, msg.duration_nsec,
-                         msg.idle_timeout, msg.hard_timeout,
-                         msg.packet_count, msg.byte_count, msg.match)
+                          'cookie=%d priority=%d reason=%s table_id=%d '
+                          'duration_sec=%d duration_nsec=%d '
+                          'idle_timeout=%d hard_timeout=%d '
+                          'packet_count=%d byte_count=%d match.fields=%s',
+                          msg.cookie, msg.priority, reason, msg.table_id,
+                          msg.duration_sec, msg.duration_nsec,
+                          msg.idle_timeout, msg.hard_timeout,
+                          msg.packet_count, msg.byte_count, msg.match)
         try:
             self.neighbor_cache.set_stale(msg.cookie)
             self.logger.info(str(self.neighbor_cache))
@@ -340,7 +342,7 @@ class NdpProxy(app_manager.RyuApp):
             self.logger.debug("NA looks like this:\n " + na.show(dump=True))
             self._send_packet(na, dpid=dpid)
         else:
-            self.logger.info("Cache miss, generating NS.")
+            self.logger.info("Cache miss, sending NS.")
             self.statistics['cache_miss_count'] += 1
             ns = create_ns(ipv6_dst, dst, src_ip=ipv6_src, src_mac=src, tgt_ip=icmpv6_tgt)
             self.logger.debug("NS looks like this:\n " + ns.show(dump=True))
