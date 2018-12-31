@@ -1,7 +1,5 @@
 import unittest
 
-from nc.cache_entry import CacheEntry
-from nc.multi_dict import MultiDict
 from nc.neighbor_cache import NeighborCache
 
 
@@ -44,7 +42,6 @@ class TestNeighborCache(unittest.TestCase):
         with self.assertRaises(KeyError):
             assert nc.entries.values[entry]
 
-
     def test_add_existing(self):
         nc = NeighborCache()
         ip, mac = '127.0.0.1', '00:00:00:00:00:00'
@@ -56,12 +53,3 @@ class TestNeighborCache(unittest.TestCase):
         self.assertEqual(entry_a, entry_b)
         self.assertTrue(entry_a.has_ip(ip))
         self.assertTrue(entry_a.has_ip(ip2))
-        #print(nc)
-
-    #TODO:
-    def test_gen_cookie(self):
-        pass
-
-    # TODO:
-    def test_mac_to_int(self):
-        pass

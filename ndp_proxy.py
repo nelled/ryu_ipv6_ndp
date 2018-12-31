@@ -12,20 +12,26 @@
 # implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+################################
+################################
+# TODO: Look into meter tables in order to prevent flooding https://github.com/vanhauser-thc/thc-ipv6
 
+from collections import defaultdict, deque, Iterable
+from time import time, ctime
+
+from ryu.app.wsgi import WSGIApplication
 from ryu.base import app_manager
 from ryu.controller import ofp_event
 from ryu.controller.handler import CONFIG_DISPATCHER, MAIN_DISPATCHER, DEAD_DISPATCHER
 from ryu.controller.handler import set_ev_cls
 from ryu.lib.packet import ether_types, ethernet, packet, ipv6
 from ryu.ofproto import ofproto_v1_3
-###################################
-# Solve this import thing, its annoying
-from scapy import all as scapy
 
-from config import router_mac, rule_idle_timeout, router_dns
-from helpers import mac2ipv6, make_sn_mc
+from config import router_mac, rule_idle_timeout, max_msg_buf_len, ndp_proxy_instance_name
 from nc.neighbor_cache import NeighborCache
+from ndp_proxy_controller import NdpProxyController
+from ndp_proxy_pcap_writer import NdpProxyPcapWriter
+from packet_creator import create_na, create_ns, create_ra
 
 ICMPv6_CODES = {133: 'Router Solicitation',
                 134: 'Router Advertisement',
@@ -35,17 +41,75 @@ ICMPv6_CODES = {133: 'Router Solicitation',
                 }
 
 
-class SimpleSwitch13(app_manager.RyuApp):
+class NdpProxy(app_manager.RyuApp):
+    """
+    Ryu App implementing a NDP proxy. Acts as sink and source of all NDP messages and maintains its own
+    neighbor cache. Flows with a short timeout are installed for known neighbors and flow deleted messages
+    are used to notify the proxy that a host has not received traffic in a while. Such neighbors are marked
+    as stale.
+    """
     OFP_VERSIONS = [ofproto_v1_3.OFP_VERSION]
 
+    # Needed for REST
+    _CONTEXTS = {'wsgi': WSGIApplication}
+
     def __init__(self, *args, **kwargs):
-        super(SimpleSwitch13, self).__init__(*args, **kwargs)
+        super(NdpProxy, self).__init__(*args, **kwargs)
         self.datapaths = {}
         self.mac_to_port = {}
         self.neighbor_cache = NeighborCache()
-        self.logger.info("Neighbor Cache Created")
-        self.statistics = {'cache_miss_count': 0
+        self.logger.info("Neighbor Cache reated.")
+        self.statistics = {'cache_miss_count': 0,
+                           133: defaultdict(lambda: defaultdict(lambda: deque(maxlen=max_msg_buf_len))),
+                           134: defaultdict(lambda: defaultdict(lambda: deque(maxlen=max_msg_buf_len))),
+                           135: defaultdict(lambda: defaultdict(lambda: deque(maxlen=max_msg_buf_len))),
+                           136: defaultdict(lambda: defaultdict(lambda: deque(maxlen=max_msg_buf_len))),
+                           137: defaultdict(lambda: defaultdict(lambda: deque(maxlen=max_msg_buf_len)))
                            }
+
+        self.pcap_writer = NdpProxyPcapWriter(self.logger)
+
+        # Needed for REST
+        wsgi = kwargs['wsgi']
+        wsgi.register(NdpProxyController,
+                      {ndp_proxy_instance_name: self})
+
+        self.logger.info("NDP proxy running...")
+
+    @staticmethod
+    def _is_for_router(dst):
+        if dst == router_mac:
+            return True
+        else:
+            return False
+
+    # Takes msg and returns src, dst, and icmpv6 tgt
+    @staticmethod
+    def _extract_addr(msg):
+        pkt = packet.Packet(msg.data)
+        ipv6_header = pkt.get_protocol(ipv6.ipv6)
+        # TODO: make this safer, is there a possibility that data is of wrong format or pkt does not have the element?
+        icmpv6_header = pkt[2].data
+        ipv6_dst = ipv6_header.dst
+        ipv6_src = ipv6_header.src
+        icmpv6_tgt = icmpv6_header.dst
+
+        return ipv6_dst, ipv6_src, icmpv6_tgt
+
+    def get_stats_dict(self):
+        return self._to_dict(self.statistics)
+
+    def _to_dict(self, data):
+        d = {}
+        for k, v in data.items():
+            if not isinstance(v, dict):
+                if not isinstance(v, Iterable):
+                    d[k] = v
+                else:
+                    d[k] = list(v)
+            else:
+                d[k] = self._to_dict(v)
+        return d
 
     @set_ev_cls(ofp_event.EventOFPStateChange,
                 [MAIN_DISPATCHER, DEAD_DISPATCHER])
@@ -55,6 +119,7 @@ class SimpleSwitch13(app_manager.RyuApp):
             if datapath.id not in self.datapaths:
                 self.logger.debug('register datapath: %016x', datapath.id)
                 self.datapaths[datapath.id] = datapath
+
         elif ev.state == DEAD_DISPATCHER:
             if datapath.id in self.datapaths:
                 self.logger.debug('unregister datapath: %016x', datapath.id)
@@ -83,7 +148,7 @@ class SimpleSwitch13(app_manager.RyuApp):
             self.add_flow(datapath, 10, match, actions, cookie=icmp_code, timeout=0)
 
     def add_flow(self, datapath, priority, match, actions, buffer_id=None, cookie=0, timeout=rule_idle_timeout):
-        print("Added flow for: " + str(match))
+        self.logger.debug("Added flow for: " + str(match))
         ofproto = datapath.ofproto
         parser = datapath.ofproto_parser
 
@@ -110,6 +175,9 @@ class SimpleSwitch13(app_manager.RyuApp):
             self.logger.debug("packet truncated: only %s of %s bytes",
                               ev.msg.msg_len, ev.msg.total_len)
         msg = ev.msg
+        # Write to pcap if flag set
+        self.pcap_writer.write_pcap_all(msg)
+
         datapath = msg.datapath
         ofproto = datapath.ofproto
         in_port = msg.match['in_port']
@@ -132,17 +200,19 @@ class SimpleSwitch13(app_manager.RyuApp):
         else:
             reason = msg.reason
 
+        # Trigger icmpv6 handling
         if msg.cookie in ICMPv6_CODES.keys():
             self._ndp_packet_handler(dpid, src, dst, in_port, msg.cookie, msg)
         else:
-            self.logger.info("Another Message: %s %s %s %s reason=%s match=%s cookie=%d ether=%d", dpid, src, dst,
+            # Other messages do not concern us
+            self.logger.debug("Another Message: %s %s %s %s reason=%s match=%s cookie=%d ether=%d", dpid, src, dst,
                              in_port, reason, msg.match, msg.cookie, eth.ethertype)
             self._learn_mac_send(dpid, src, dst, in_port, msg, timeout=0)
 
     def _learn_mac(self, dpid, src, in_port):
         self.mac_to_port[dpid][src] = in_port
 
-    # Normal behaviour outsourced to function so we can control what happens to ICMPv6 packets
+    # Forward and learn MAC, this is for non icmpv6 traffic
     def _learn_mac_send(self, dpid, src, dst, in_port, msg, cookie=0, forward_packet=True, timeout=rule_idle_timeout):
         datapath = self.datapaths[dpid]
         ofproto = datapath.ofproto
@@ -157,14 +227,14 @@ class SimpleSwitch13(app_manager.RyuApp):
 
         actions = [parser.OFPActionOutput(out_port)]
 
-        # install a flow to avoid packet_in next time
+        # Install a flow to avoid packet_in next time
         if out_port != ofproto.OFPP_FLOOD:
             match = parser.OFPMatch(in_port=in_port, eth_dst=dst, eth_src=src)
             # If we do not forward the packet (because we send our own NS back i.e.)
             if forward_packet == False:
                 self.add_flow(datapath, 1, match, actions, cookie=cookie, timeout=timeout)
                 return
-            # verify if we have a valid buffer_id, if yes avoid to send both
+            # Verify if we have a valid buffer_id, if yes avoid to send both
             # flow_mod & packet_out
             if msg.buffer_id != ofproto.OFP_NO_BUFFER:
                 self.add_flow(datapath, 1, match, actions, msg.buffer_id, cookie=cookie, timeout=timeout)
@@ -194,8 +264,7 @@ class SimpleSwitch13(app_manager.RyuApp):
             reason = 'GROUP DELETE'
         else:
             reason = 'unknown'
-
-        self.logger.info('OFPFlowRemoved received: '
+        self.logger.debug('OFPFlowRemoved received: '
                          'cookie=%d priority=%d reason=%s table_id=%d '
                          'duration_sec=%d duration_nsec=%d '
                          'idle_timeout=%d hard_timeout=%d '
@@ -206,24 +275,29 @@ class SimpleSwitch13(app_manager.RyuApp):
                          msg.packet_count, msg.byte_count, msg.match)
         try:
             self.neighbor_cache.set_stale(msg.cookie)
-            print(self.neighbor_cache)
+            self.logger.info(str(self.neighbor_cache))
         except AttributeError:
             self.logger.info("Flow removed message does not concern cache.")
 
     def _ndp_packet_handler(self, dpid, src, dst, in_port, cookie, msg):
         if cookie == 133:
+            self.statistics[cookie][dpid][in_port].append((src, ctime(time())))
             self._rs_handler(dpid, src, dst, in_port, cookie, msg)
 
         if cookie == 134:
+            self.statistics[cookie][dpid][in_port].append((src, ctime(time())))
             self._ra_handler(dpid, src, dst, in_port, cookie, msg)
 
         if cookie == 135:
+            self.statistics[cookie][dpid][in_port].append((src, ctime(time())))
             self._ns_handler(dpid, src, dst, in_port, cookie, msg)
 
         if cookie == 136:
+            self.statistics[cookie][dpid][in_port].append((src, ctime(time())))
             self._na_handler(dpid, src, dst, in_port, cookie, msg)
 
         if cookie == 137:
+            self.statistics[cookie][dpid][in_port].append((src, ctime(time())))
             self._rm_handler(dpid, src, dst, in_port, cookie, msg)
 
     def _rs_handler(self, dpid, src, dst, in_port, cookie, msg):
@@ -243,147 +317,71 @@ class SimpleSwitch13(app_manager.RyuApp):
         is_for_router = self._is_for_router(dst)
         if cache_entry:
             self.logger.info("Cache hit, responding with our own NA.")
-            na = self._create_na(ipv6_src, ipv6_dst, src, dst)
-            self.logger.info("NA looks like this:")
-            self.logger.info(na.show())
+            na = create_na(ipv6_src, ipv6_dst, src, dst)
+            self.logger.debug("NA looks like this:\n " + na.show(dump=True))
             self._send_packet(na, dpid=dpid)
-            self.logger.info("NA sent")
         if is_for_router:
             self.logger.info("Received NS for router, responding with our own NA.")
             # Reverse src and dst in signature here
-            na = self._create_na(ipv6_dst, ipv6_src, dst, src, r=1)
-            self.logger.info("NA looks like this:")
-            self.logger.info(na.show())
+            na = create_na(ipv6_dst, ipv6_src, dst, src, r=1)
+            self.logger.debug("NA looks like this:\n " + na.show(dump=True))
             self._send_packet(na, dpid=dpid)
-            self.logger.info("NA sent")
         else:
             self.logger.info("Cache miss, generating NS.")
             self.statistics['cache_miss_count'] += 1
-            ns = self._create_ns(ipv6_dst, dst, src_ip=ipv6_src, src_mac=src, tgt_ip=icmpv6_tgt)
-            self.logger.info("NS looks like this:")
-            self.logger.info(ns.show())
+            ns = create_ns(ipv6_dst, dst, src_ip=ipv6_src, src_mac=src, tgt_ip=icmpv6_tgt)
+            self.logger.debug("NS looks like this:\n " + ns.show(dump=True))
             self._send_packet(ns, dpid=dpid)
-            self.logger.info("NS sent")
-
-    def _is_for_router(self, dst):
-        if dst == router_mac:
-            return True
-        else:
-            return False
-
-    # Takes msg and returns src, dst, and icmpv6 tgt
-    def _extract_addr(self, msg):
-        pkt = packet.Packet(msg.data)
-        ipv6_header = pkt.get_protocol(ipv6.ipv6)
-        # TODO: make this safer, is there a possibility that data is of wrong format or pkt does not have the element?
-        icmpv6_header = pkt[2].data
-        ipv6_dst = ipv6_header.dst
-        ipv6_src = ipv6_header.src
-        icmpv6_tgt = icmpv6_header.dst
-
-        return ipv6_dst, ipv6_src, icmpv6_tgt
 
     def _na_handler(self, dpid, src, dst, in_port, cookie, msg):
         self.logger.info(ICMPv6_CODES[cookie] + ": %s %s %s %s cookie=%d", dpid, src, dst, in_port, cookie)
         pkt = packet.Packet(msg.data)
         ip6_header = pkt.get_protocol(ipv6.ipv6)
         cache_id_cookie = self.neighbor_cache.add_entry(ip6_header.src, src)
-        print(self.neighbor_cache)
+        self.logger.info(str(self.neighbor_cache))
         self._learn_mac_send(dpid, src, dst, in_port, msg, cache_id_cookie)
 
     def _rm_handler(self, dpid, src, dst, in_port, cookie, msg):
+        # Redirect messages only concern us when there are several routers
         self.logger.info(ICMPv6_CODES[cookie] + ": %s %s %s %s cookie=%d", dpid, src, dst, in_port, cookie)
 
     def _addr_in_cache(self, ip):
         return self.neighbor_cache.get_entry(ip)
 
-    def _create_na(self, src_ip, dst_ip, src_mac, dst_mac, r=0, s=1):
-        # Advertisement
-        ether_head = scapy.Ether(dst=dst_mac, src=src_mac)
-        ipv6_head = scapy.IPv6(src=src_ip, dst=dst_ip)
-        icmpv6_ns = scapy.ICMPv6ND_NA(tgt=src_ip, R=r, S=s)
-        icmpv6_opt_pref = scapy.ICMPv6NDOptPrefixInfo()
-        # Is this the address the answer will be sent to?
-        llSrcAdd = scapy.ICMPv6NDOptSrcLLAddr(lladdr=src_mac)
-        adv = (ether_head / ipv6_head / icmpv6_ns / icmpv6_opt_pref / llSrcAdd)
-
-        return adv
-
-    # TODO: Put this in wiki, Thomas' code did not work because no ether_head and possibly no prefix info
-    def _create_ns(self, dst_ip, dst_mac, src_ip=None, src_mac=None, tgt_ip=None):
-        # Solicitation
-        if src_ip is None:
-            src_ip = mac2ipv6(router_mac)
-        if src_mac is None:
-            src_mac = router_mac
-        if tgt_ip is None:
-            tgt_ip = dst_ip
-        ether_head = scapy.Ether(dst=dst_mac, src=src_mac)
-        # With solicited node multicast
-        ipv6_head = scapy.IPv6(src=src_ip, dst=make_sn_mc(dst_ip))
-        # Global address
-        icmpv6_ns = scapy.ICMPv6ND_NS(tgt=tgt_ip)
-        icmpv6_opt_pref = scapy.ICMPv6NDOptSrcLLAddr(lladdr=src_mac)
-
-        sol = (ether_head / ipv6_head / icmpv6_ns / icmpv6_opt_pref)
-
-        return sol
-
     def _send_ra(self, dpid=None, dst=None):
         if not dst:
+            # Send to all
             dst = '33:33:00:00:00:01'
         self.logger.info('Sending RA to: %s', dst)
-        ra = self._create_ra(dst=dst)
-        self.logger.info('RA looks like this:')
-        ra.show()
+        ra = create_ra(dst=dst)
+        self.logger.debug("RA looks like this:\n " + ra.show(dump=True))
         self._send_packet(ra, dpid)
-        self.logger.info('RA sent.')
-
-    def _create_ra(self, dst=None):
-        ether_head = scapy.Ether(src=router_mac, dst=dst)
-        ipv6_head = scapy.IPv6()
-        ipv6_head.dest = 'ff02::1'
-        ipv6_head.src = mac2ipv6(router_mac)
-        ipv6_ra = scapy.ICMPv6ND_RA()
-        ipv6_nd_pref = scapy.ICMPv6NDOptPrefixInfo()
-        ipv6_nd_pref.prefix = '2001:db8:1::'
-        ipv6_nd_pref.prefixlen = 64
-        ipv6_nd_pref.validlifetime = 7200  # Valid-Lifetime 2h
-        ipv6_nd_pref.preferredlifetime = 1800  # Prefered-Lifetime 30min
-        o_route = scapy.ICMPv6NDOptRouteInfo()  # ICMPv6-Option: Route Information
-        o_route.prefix = '::'  # Default Route
-        o_route.plen = 0  # Prefix length in bit
-        o_route.rtlifetime = 1800  # Same value as the Prefered-Lifetime of the Router
-        o_rdns = scapy.ICMPv6NDOptRDNSS()  # ICMPv6-Option: Recursive DNS Server
-        o_rdns.dns = router_dns  # List of DNS Server Addresses
-        o_rdns.lifetime = 1800  # Same value as the Prefered-Lifetime of the Router
-
-        o_mac = scapy.ICMPv6NDOptSrcLLAddr()  # ICMPv6-Option: Source Link Layer Address
-        o_mac.lladdr = router_mac  # MAC address
-
-        ra = (ether_head / ipv6_head / ipv6_ra / ipv6_nd_pref / o_route / o_rdns / o_mac)
-        return ra
 
     def _send_packet(self, pkt, dpid=None):
         # If specific dpid
         if dpid:
             datapaths = [dpid]
 
-        # Else send on all
+        # Send on all
         else:
             datapaths = self.datapaths.keys()
 
         for dp in datapaths:
             self._send_on_dp(pkt, dp)
 
+        self.pcap_writer.write_pcap_generated(pkt)
+
     def _send_on_dp(self, pkt, dpid):
         datapath = self.datapaths[dpid]
         ofproto = datapath.ofproto
         parser = datapath.ofproto_parser
         ps = bytes(pkt)
-        if pkt['Ether'].dst in self.mac_to_port[dpid]:
-            out_port = self.mac_to_port[dpid][pkt['Ether'].dst]
-        else:
+        try:
+            if pkt['Ether'].dst in self.mac_to_port[dpid]:
+                out_port = self.mac_to_port[dpid][pkt['Ether'].dst]
+            else:
+                out_port = ofproto.OFPP_FLOOD
+        except KeyError:
             out_port = ofproto.OFPP_FLOOD
 
         actions = [parser.OFPActionOutput(out_port)]

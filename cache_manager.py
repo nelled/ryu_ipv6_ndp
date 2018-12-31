@@ -1,4 +1,3 @@
-
 # Copyright (C) 2016 Nippon Telegraph and Telephone Corporation.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -17,23 +16,23 @@
 from ryu.lib import hub
 
 from config import cache_entry_timeout
-from switch_v6 import SimpleSwitch13
+from ndp_proxy import NdpProxy
 
 
-
-class CacheManager(SimpleSwitch13):
+class CacheManager(NdpProxy):
 
     def __init__(self, *args, **kwargs):
         super(CacheManager, self).__init__(*args, **kwargs)
         self.ra_thread = hub.spawn(self._cache_check)
         self.cache_entry_timeout = cache_entry_timeout
+        self.logger.info("Cache manager running...")
 
     # Wrapper for cyclic checking for dead entries
     def _cache_check(self):
         while True:
+            hub.sleep(cache_entry_timeout / 2)
             self._check_entries()
-            print(self.neighbor_cache)
-            hub.sleep(cache_entry_timeout/2)
+            self.logger.info(str(self.neighbor_cache))
 
     # Checks cache entries and updates state depending on timer
     def _check_entries(self):

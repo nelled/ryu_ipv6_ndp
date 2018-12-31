@@ -44,11 +44,11 @@ ICMPv6_CODES = {133: 'Router Solicitation',
                 }
 
 
-class SimpleSwitch13(app_manager.RyuApp):
+class NdpProxy(app_manager.RyuApp):
     OFP_VERSIONS = [ofproto_v1_3.OFP_VERSION]
 
     def __init__(self, *args, **kwargs):
-        super(SimpleSwitch13, self).__init__(*args, **kwargs)
+        super(NdpProxy, self).__init__(*args, **kwargs)
         self.datapaths = {}
         self.mac_to_port = {}
         self.neighbor_cache = NeighborCache()
