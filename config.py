@@ -1,3 +1,6 @@
+# Prefix
+ipv6_nd_prefix = '2001:db8:1::'
+
 # MAC of router to be used in RAs
 router_mac = '70:01:02:03:04:05'
 

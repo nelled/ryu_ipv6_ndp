@@ -2,7 +2,7 @@ from ipaddress import IPv6Address
 
 from scapy import all as scapy
 
-from config import router_mac, router_dns
+from config import router_mac, router_dns, ipv6_nd_prefix
 
 
 def create_na(src_ip, dst_ip, src_mac, dst_mac, r=0, s=1):
@@ -45,7 +45,7 @@ def create_ra(dst=None):
     ipv6_head.src = mac2ipv6(router_mac)
     ipv6_ra = scapy.ICMPv6ND_RA()
     ipv6_nd_pref = scapy.ICMPv6NDOptPrefixInfo()
-    ipv6_nd_pref.prefix = '2001:db8:1::'
+    ipv6_nd_pref.prefix = ipv6_nd_prefix
     ipv6_nd_pref.prefixlen = 64
     ipv6_nd_pref.validlifetime = 7200  # Valid-Lifetime 2h
     ipv6_nd_pref.preferredlifetime = 1800  # Prefered-Lifetime 30min
