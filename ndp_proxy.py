@@ -27,7 +27,7 @@ from ryu.controller.handler import set_ev_cls
 from ryu.lib.packet import ether_types, ethernet, packet, ipv6
 from ryu.ofproto import ofproto_v1_3
 
-from config import router_mac, rule_idle_timeout, max_msg_buf_len, ndp_proxy_instance_name, max_rate
+from config import router_mac, rule_idle_timeout, max_msg_buf_len, ndp_proxy_instance_name, max_rate, meter_flag
 from nc.neighbor_cache import NeighborCache
 from ndp_proxy_controller import NdpProxyController
 from ndp_proxy_pcap_writer import NdpProxyPcapWriter
@@ -142,17 +142,19 @@ class NdpProxy(app_manager.RyuApp):
                                           ofproto.OFPCML_NO_BUFFER)]
         self.add_flow(datapath, 0, match, actions, timeout=0)
 
-        # Create band
-        bands = [parser.OFPMeterBandDrop(rate=max_rate, burst_size=10)]
-        # Install meter request
-        req = parser.OFPMeterMod(datapath=datapath, command=ofproto.OFPMC_ADD, flags=ofproto.OFPMF_PKTPS, meter_id=1,
+        inst = None
+        if meter_flag:
+            # Create band
+            bands = [parser.OFPMeterBandDrop(rate=max_rate, burst_size=10)]
+            # Install meter request
+            req = parser.OFPMeterMod(datapath=datapath, command=ofproto.OFPMC_ADD, flags=ofproto.OFPMF_PKTPS, meter_id=1,
                                  bands=bands)
+            # Send request
+            datapath.send_msg(req)
 
-        datapath.send_msg(req)
+            # Additional instruction to apply meter
+            inst = [parser.OFPInstructionMeter(1)]
 
-        # Additional instruction to apply meter
-        inst = [parser.OFPInstructionMeter(1)]
-        # inst = None
         # Install match for all ICMPv6 messages
         for icmp_code in range(133, 137 + 1):
             match = parser.OFPMatch(eth_type=0x86dd, ip_proto=58, icmpv6_type=icmp_code)
@@ -220,7 +222,7 @@ class NdpProxy(app_manager.RyuApp):
             self._ndp_packet_handler(dpid, src, dst, in_port, msg.cookie, msg)
         else:
             # Other messages do not concern us
-            self.logger.debug("Another Message: %s %s %s %s reason=%s match=%s cookie=%d ether=%d", dpid, src, dst,
+            self.logger.info("Another Message: %s %s %s %s reason=%s match=%s cookie=%d ether=%d", dpid, src, dst,
                               in_port, reason, msg.match, msg.cookie, eth.ethertype)
             self._learn_mac_send(dpid, src, dst, in_port, msg, timeout=0)
 

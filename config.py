@@ -1,3 +1,6 @@
+# Use metering
+meter_flag = True
+
 # MAC of router to be used in RAs
 router_mac = '70:01:02:03:04:05'
 
@@ -24,4 +27,4 @@ rest_base_url = '/ndp-proxy'
 ndp_proxy_instance_name = 'ndp_proxy'
 
 # Rate for meter at which packets will get dropped
-max_rate = 10
+max_rate = 5
