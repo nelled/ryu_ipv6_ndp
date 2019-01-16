@@ -148,8 +148,9 @@ class NdpProxy(app_manager.RyuApp):
             # Create band
             bands = [parser.OFPMeterBandDrop(rate=max_rate, burst_size=10)]
             # Install meter request
-            req = parser.OFPMeterMod(datapath=datapath, command=ofproto.OFPMC_ADD, flags=ofproto.OFPMF_PKTPS, meter_id=1,
-                                 bands=bands)
+            req = parser.OFPMeterMod(datapath=datapath, command=ofproto.OFPMC_ADD, flags=ofproto.OFPMF_PKTPS,
+                                     meter_id=1,
+                                     bands=bands)
             # Send request
             datapath.send_msg(req)
 
@@ -224,7 +225,7 @@ class NdpProxy(app_manager.RyuApp):
         else:
             # Other messages do not concern us
             self.logger.info("Another Message: %s %s %s %s reason=%s match=%s cookie=%d ether=%d", dpid, src, dst,
-                              in_port, reason, msg.match, msg.cookie, eth.ethertype)
+                             in_port, reason, msg.match, msg.cookie, eth.ethertype)
             self._learn_mac_send(dpid, src, dst, in_port, msg, timeout=0)
 
     def _learn_mac(self, dpid, src, in_port):
@@ -327,10 +328,37 @@ class NdpProxy(app_manager.RyuApp):
         # Log and do not forward, only controller emits RAs
         self.logger.info(ICMPv6_CODES[cookie] + ": %s %s %s %s cookie=%d", dpid, src, dst, in_port, cookie)
 
+    def _dud_handler(self, dpid, src, dst, in_port, cookie, msg):
+        self.logger.info('This is a DUD message')
+        ipv6_dst, ipv6_src, icmpv6_tgt = self._extract_addr(msg)
+        self.logger.info('Tentative addr is: %s', icmpv6_tgt)
+        ip_entry = self.neighbor_cache.get_entry(icmpv6_tgt)
+        # TODO: Ping does not work
+        if ip_entry:
+            self.logger.info("Collision, sending NA to notify configuring host...")
+            # TODO: Which address should be advertised??? tenative?
+            na = create_na(ipv6_src, ipv6_dst, src, dst)
+            self.logger.debug("NA looks like this:\n " + na.show(dump=True))
+            self._send_packet(na, dpid=dpid)
+        else:
+            cache_id_cookie = self.neighbor_cache.add_entry(icmpv6_tgt, src)
+            self.logger.info(str(self.neighbor_cache))
+
+
+        # Check if we have a cache entry for tentative address. If yes, send NA!
+        # If not
+
+    def _for_router_handler(self):
+        pass
+
     def _ns_handler(self, dpid, src, dst, in_port, cookie, msg):
         self.logger.info(ICMPv6_CODES[cookie] + ": %s %s %s %s cookie=%d", dpid, src, dst, in_port, cookie)
         ipv6_dst, ipv6_src, icmpv6_tgt = self._extract_addr(msg)
         self.logger.info("Handling NS, DST IS: %s", ipv6_dst)
+        if ipv6_src == '::':
+            self._dud_handler(dpid, src, dst, in_port, cookie, msg)
+        else:
+            self.logger.info(ipv6_src)
         cache_entry = self._addr_in_cache(ipv6_dst)
         is_for_router = self._is_for_router(dst)
         if cache_entry:
@@ -353,11 +381,17 @@ class NdpProxy(app_manager.RyuApp):
 
     def _na_handler(self, dpid, src, dst, in_port, cookie, msg):
         self.logger.info(ICMPv6_CODES[cookie] + ": %s %s %s %s cookie=%d", dpid, src, dst, in_port, cookie)
+        '''
         pkt = packet.Packet(msg.data)
         ip6_header = pkt.get_protocol(ipv6.ipv6)
         # Check if dst is MC, if yes only update entry or discard
         if dst == ALL_NODES_MC:
             if self.neighbor_cache.get_entry(src):
+                # TODO: Cannot simply add. Need to check if an entry for this IP already exists. Also need to change learning behaviour
+                # TODO: 1. Check if entry already exists
+                #           * if not -> Add
+                #           * if yes -> Send neighbor solicitation to OLD entry. If answer, warn and discard new one,
+                #                                                                else update
                 cache_id_cookie = self.neighbor_cache.add_entry(ip6_header.src, src)
                 self.logger.info(str(self.neighbor_cache))
                 self._learn_mac_send(dpid, src, dst, in_port, msg, cache_id_cookie)
@@ -367,10 +401,7 @@ class NdpProxy(app_manager.RyuApp):
             cache_id_cookie = self.neighbor_cache.add_entry(ip6_header.src, src)
             self.logger.info(str(self.neighbor_cache))
             self._learn_mac_send(dpid, src, dst, in_port, msg, cache_id_cookie)
-
-
-
-
+        '''
 
     def _rm_handler(self, dpid, src, dst, in_port, cookie, msg):
         # Redirect messages only concern us when there are several routers
