@@ -39,6 +39,7 @@ ICMPv6_CODES = {133: 'Router Solicitation',
                 136: 'Neighbor Advertisement',
                 137: 'Redirect'
                 }
+ALL_NODES_MC = '33:33:00:00:00:01'
 
 
 class NdpProxy(app_manager.RyuApp):
@@ -354,9 +355,22 @@ class NdpProxy(app_manager.RyuApp):
         self.logger.info(ICMPv6_CODES[cookie] + ": %s %s %s %s cookie=%d", dpid, src, dst, in_port, cookie)
         pkt = packet.Packet(msg.data)
         ip6_header = pkt.get_protocol(ipv6.ipv6)
-        cache_id_cookie = self.neighbor_cache.add_entry(ip6_header.src, src)
-        self.logger.info(str(self.neighbor_cache))
-        self._learn_mac_send(dpid, src, dst, in_port, msg, cache_id_cookie)
+        # Check if dst is MC, if yes only update entry or discard
+        if dst == ALL_NODES_MC:
+            if self.neighbor_cache.get_entry(src):
+                cache_id_cookie = self.neighbor_cache.add_entry(ip6_header.src, src)
+                self.logger.info(str(self.neighbor_cache))
+                self._learn_mac_send(dpid, src, dst, in_port, msg, cache_id_cookie)
+            else:
+                self.logger.info(ICMPv6_CODES[cookie] + " was discarded.")
+        else:
+            cache_id_cookie = self.neighbor_cache.add_entry(ip6_header.src, src)
+            self.logger.info(str(self.neighbor_cache))
+            self._learn_mac_send(dpid, src, dst, in_port, msg, cache_id_cookie)
+
+
+
+
 
     def _rm_handler(self, dpid, src, dst, in_port, cookie, msg):
         # Redirect messages only concern us when there are several routers
@@ -368,7 +382,7 @@ class NdpProxy(app_manager.RyuApp):
     def _send_ra(self, dpid=None, dst=None):
         if not dst:
             # Send to all
-            dst = '33:33:00:00:00:01'
+            dst = ALL_NODES_MC
         self.logger.info('Sending RA to: %s', dst)
         ra = create_ra(dst=dst)
         self.logger.debug("RA looks like this:\n " + ra.show(dump=True))
