@@ -30,7 +30,9 @@ class NeighborCache:
             cookie = self._gen_cookie(mac)
             self.entries.iterload([mac, ip, cookie], [CacheEntry(ip, mac, cookie)])
         else:
-            entry.set_active()
+            # TODO: On an existing entry, addition of an address will set state for the whole entry.
+            # Todo: Probably need to save additional info for each IP (state, timers). Is this possible now
+            # or better database? Could save IPs in dictionary instead of list...
             entry.reset_updated()
             if not entry.has_ip(ip):
                 entry.add_ip(ip)

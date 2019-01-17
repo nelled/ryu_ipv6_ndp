@@ -231,8 +231,9 @@ class NdpProxy(app_manager.RyuApp):
     def _learn_mac(self, dpid, src, in_port):
         self.mac_to_port[dpid][src] = in_port
 
-    # Forward and learn MAC, this is for non icmpv6 traffic
-    def _learn_mac_send(self, dpid, src, dst, in_port, msg, cookie=0, forward_packet=True, timeout=rule_idle_timeout):
+    # Forward and learn MAC
+    def _learn_mac_send(self, dpid, src, dst, in_port, msg, cookie=0, forward_packet=True, timeout=rule_idle_timeout,
+                        patch_through=False):
         datapath = self.datapaths[dpid]
         ofproto = datapath.ofproto
         parser = datapath.ofproto_parser
@@ -246,20 +247,21 @@ class NdpProxy(app_manager.RyuApp):
 
         actions = [parser.OFPActionOutput(out_port)]
 
-        # Install a flow to avoid packet_in next time
-        if out_port != ofproto.OFPP_FLOOD:
-            match = parser.OFPMatch(in_port=in_port, eth_dst=dst, eth_src=src)
-            # If we do not forward the packet (because we send our own NS back i.e.)
-            if forward_packet == False:
-                self.add_flow(datapath, 1, match, actions, cookie=cookie, timeout=timeout)
-                return
-            # Verify if we have a valid buffer_id, if yes avoid to send both
-            # flow_mod & packet_out
-            if msg.buffer_id != ofproto.OFP_NO_BUFFER:
-                self.add_flow(datapath, 1, match, actions, buffer_id=msg.buffer_id, cookie=cookie, timeout=timeout)
-                return
-            else:
-                self.add_flow(datapath, 1, match, actions, cookie=cookie, timeout=timeout)
+        if not patch_through:
+            # Install a flow to avoid packet_in next time
+            if out_port != ofproto.OFPP_FLOOD:
+                match = parser.OFPMatch(in_port=in_port, eth_dst=dst, eth_src=src)
+                # If we do not forward the packet (because we send our own NS back i.e.)
+                if forward_packet == False:
+                    self.add_flow(datapath, 1, match, actions, cookie=cookie, timeout=timeout)
+                    return
+                # Verify if we have a valid buffer_id, if yes avoid to send both
+                # flow_mod & packet_out
+                if msg.buffer_id != ofproto.OFP_NO_BUFFER:
+                    self.add_flow(datapath, 1, match, actions, buffer_id=msg.buffer_id, cookie=cookie, timeout=timeout)
+                    return
+                else:
+                    self.add_flow(datapath, 1, match, actions, cookie=cookie, timeout=timeout)
         data = None
         if msg.buffer_id == ofproto.OFP_NO_BUFFER:
             data = msg.data
@@ -333,75 +335,86 @@ class NdpProxy(app_manager.RyuApp):
         ipv6_dst, ipv6_src, icmpv6_tgt = self._extract_addr(msg)
         self.logger.info('Tentative addr is: %s', icmpv6_tgt)
         ip_entry = self.neighbor_cache.get_entry(icmpv6_tgt)
-        # TODO: Ping does not work
         if ip_entry:
             self.logger.info("Collision, sending NA to notify configuring host...")
-            # TODO: Which address should be advertised??? tenative?
+            # TODO: Which address should be advertised??? tentative?
+            # Need to send NA to notify of collision, how should this packet look like
+            # TODO: In case of collision with STALE entry, a last check would be good
             na = create_na(ipv6_src, ipv6_dst, src, dst)
             self.logger.debug("NA looks like this:\n " + na.show(dump=True))
             self._send_packet(na, dpid=dpid)
         else:
+            # We do not need to forward this NS, because DUD does not create an entry in neighbor cache of host
+            '''
+            - The Target Address is a "tentative" address on which Duplicate
+             Address Detection is being performed [ADDRCONF].
+            '''
+            # Add to NC
             cache_id_cookie = self.neighbor_cache.add_entry(icmpv6_tgt, src)
             self.logger.info(str(self.neighbor_cache))
-
-
-        # Check if we have a cache entry for tentative address. If yes, send NA!
-        # If not
-
-    def _for_router_handler(self):
-        pass
 
     def _ns_handler(self, dpid, src, dst, in_port, cookie, msg):
         self.logger.info(ICMPv6_CODES[cookie] + ": %s %s %s %s cookie=%d", dpid, src, dst, in_port, cookie)
         ipv6_dst, ipv6_src, icmpv6_tgt = self._extract_addr(msg)
         self.logger.info("Handling NS, DST IS: %s", ipv6_dst)
-        if ipv6_src == '::':
-            self._dud_handler(dpid, src, dst, in_port, cookie, msg)
-        else:
-            self.logger.info(ipv6_src)
-        cache_entry = self._addr_in_cache(ipv6_dst)
         is_for_router = self._is_for_router(dst)
-        if cache_entry:
-            self.logger.info("Cache hit, responding with our own NA.")
-            na = create_na(ipv6_src, ipv6_dst, src, dst)
-            self.logger.debug("NA looks like this:\n " + na.show(dump=True))
-            self._send_packet(na, dpid=dpid)
         if is_for_router:
             self.logger.info("Received NS for router, responding with our own NA.")
             # Reverse src and dst in signature here
             na = create_na(ipv6_dst, ipv6_src, dst, src, r=1)
             self.logger.debug("NA looks like this:\n " + na.show(dump=True))
             self._send_packet(na, dpid=dpid)
+            return
+
+        # If NS is DUD...
+        if ipv6_src == '::':
+            # TODO: If we have a collision with an entry marked as inactive, need to perform check as well?
+            # Could also be via status
+            self._dud_handler(dpid, src, dst, in_port, cookie, msg)
         else:
-            self.logger.info("Cache miss, sending NS.")
-            self.statistics['cache_miss_count'] += 1
-            ns = create_ns(ipv6_dst, dst, src_ip=ipv6_src, src_mac=src, tgt_ip=icmpv6_tgt)
-            self.logger.debug("NS looks like this:\n " + ns.show(dump=True))
-            self._send_packet(ns, dpid=dpid)
+            # UNSOLICITED NA will be ignored if there is no entry for the host. If there is an entry
+            #   we will first CHECK if there is more than one response to NS (kind of like DUD)
+            cache_entry = self._addr_in_cache(icmpv6_tgt)
+            if cache_entry:
+                self.logger.info("Cache hit, setting status to pending and patching through.")
+                cache_entry.set_pending()
+                self._learn_mac_send(dpid, src, dst, in_port, msg, cache_entry.get_cookie(), patch_through=True)
+                self.logger.info(str(self.neighbor_cache))
+
+            else:
+                # This is probably not needed, because we learn with DUD, no DUD = Address does not exist
+                # We could, however, still create an entry as with DUD and check. If no response, remove.
+                # This could be achieved by another status, entries with which get purged faster than others
+                self.logger.info("Cache miss, sending NS.")
+                self.statistics['cache_miss_count'] += 1
+                ns = create_ns(ipv6_dst, dst, src_ip=ipv6_src, src_mac=src, tgt_ip=icmpv6_tgt)
+                self.logger.debug("NS looks like this:\n " + ns.show(dump=True))
+                self._send_packet(ns, dpid=dpid)
 
     def _na_handler(self, dpid, src, dst, in_port, cookie, msg):
         self.logger.info(ICMPv6_CODES[cookie] + ": %s %s %s %s cookie=%d", dpid, src, dst, in_port, cookie)
-        '''
-        pkt = packet.Packet(msg.data)
-        ip6_header = pkt.get_protocol(ipv6.ipv6)
-        # Check if dst is MC, if yes only update entry or discard
-        if dst == ALL_NODES_MC:
-            if self.neighbor_cache.get_entry(src):
-                # TODO: Cannot simply add. Need to check if an entry for this IP already exists. Also need to change learning behaviour
-                # TODO: 1. Check if entry already exists
-                #           * if not -> Add
-                #           * if yes -> Send neighbor solicitation to OLD entry. If answer, warn and discard new one,
-                #                                                                else update
-                cache_id_cookie = self.neighbor_cache.add_entry(ip6_header.src, src)
+
+        ipv6_dst, ipv6_src, icmpv6_tgt = self._extract_addr(msg)
+        cache_entry = self.neighbor_cache.get_entry(icmpv6_tgt)
+        if cache_entry:
+            self.logger.info("Entry exists...")
+            # If entry corresponds to info in packet, we forward the NA and create a flow rule
+            # Communication is now possible
+            if icmpv6_tgt in cache_entry.get_ips() and src == cache_entry.get_mac():
+                self.logger.info("Entry info corresponds to cache, setting active and allowing communication...")
+                cache_entry.set_active()
+                self._learn_mac_send(dpid, src, dst, in_port, msg, cache_entry.get_cookie())
                 self.logger.info(str(self.neighbor_cache))
-                self._learn_mac_send(dpid, src, dst, in_port, msg, cache_id_cookie)
             else:
-                self.logger.info(ICMPv6_CODES[cookie] + " was discarded.")
+                # TODO: Start procedure to determine if update or spoof
+                # TODO: Somehow save state
+                # TODO: Send NS to BOTH
+                # TODO: If receive two responses - discard new
+                # TODO: If receive one responde from new = Update
+                # TODO: If receive one response from old
+                self.logger.info("Entry info does not correspond to cache, discarding")
         else:
-            cache_id_cookie = self.neighbor_cache.add_entry(ip6_header.src, src)
-            self.logger.info(str(self.neighbor_cache))
-            self._learn_mac_send(dpid, src, dst, in_port, msg, cache_id_cookie)
-        '''
+            self.logger.info("No entry in cache, discarding...")
 
     def _rm_handler(self, dpid, src, dst, in_port, cookie, msg):
         # Redirect messages only concern us when there are several routers

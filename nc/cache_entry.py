@@ -1,5 +1,5 @@
 from time import time
-from ipaddress import IPv6Address
+
 
 # Todo: IP address format. Save as IPv6Address or always
 # simply do preprocessing ensuring exploded format?
@@ -9,11 +9,12 @@ class CacheEntry:
     If a flow deleted message concerning this entry is received, the status is set to STALE.
     If new traffic for an entry is received, the status is sent so ACTIVE again.
     """
+
     def __init__(self, ip, mac, cookie):
         self.ips = [ip]
         self.mac = mac
         self.cookie = cookie
-        self.status = 'ACTIVE'
+        self.status = 'CREATED'
         self.last_updated = time()
         self.created_at = time()
 
@@ -28,9 +29,19 @@ class CacheEntry:
 
     def set_stale(self):
         self.status = 'STALE'
+        self.reset_updated()
 
     def set_active(self):
         self.status = 'ACTIVE'
+        self.reset_updated()
+
+    def set_inactive(self):
+        self.status = 'INACTIVE'
+        self.reset_updated()
+
+    def set_pending(self):
+        self.status = 'PENDING'
+        self.reset_updated()
 
     def get_ips(self):
         return self.ips
@@ -49,6 +60,3 @@ class CacheEntry:
 
     def add_ip(self, ip):
         self.ips.append(ip)
-
-
-

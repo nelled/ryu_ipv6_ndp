@@ -17,6 +17,7 @@ from ryu.lib import hub
 
 from config import cache_entry_timeout
 from ndp_proxy import NdpProxy
+from packet_creator import create_ns
 
 
 class CacheManager(NdpProxy):
@@ -30,16 +31,37 @@ class CacheManager(NdpProxy):
     # Wrapper for cyclic checking for dead entries
     def _cache_check(self):
         while True:
-            hub.sleep(cache_entry_timeout / 2)
+            hub.sleep(5)
             self._check_entries()
-            self.logger.info(str(self.neighbor_cache))
+            self._delete_entries()
+            self._delete_pending()
+
+    def _check_entries(self):
+        self.logger.debug("Checking old entries...")
+        for entry in self.neighbor_cache.entries.values.keys():
+            if entry.get_age() >= self.cache_entry_timeout / 2 and entry.status == 'STALE':
+                # TODO: Maybe implement on IP basis? Then need to check all IPs
+                self.logger.debug("Probing entry: %s %s", entry.get_ips()[0], entry.get_mac())
+                entry.set_inactive()
+                ns = create_ns(entry.get_ips()[0], entry.get_mac())
+                self._send_packet(ns)
 
     # Checks cache entries and updates state depending on timer
-    def _check_entries(self):
-        self.logger.info("Deleting old entries...")
+    def _delete_entries(self):
+        self.logger.debug("Deleting old entries...")
         to_delete = []
         for entry in self.neighbor_cache.entries.values.keys():
-            if entry.get_age() >= self.cache_entry_timeout and entry.status == 'STALE':
+            if entry.get_age() >= self.cache_entry_timeout / 2 and entry.status == 'INACTIVE':
                 to_delete.append(entry)
         for entry in to_delete:
             self.neighbor_cache.delete_entry_by_entry(entry)
+
+    def _delete_pending(self):
+        self.logger.debug("Deleting pending entries...")
+        to_delete = []
+        for entry in self.neighbor_cache.entries.values.keys():
+            if entry.get_age() >= 5 and entry.status == 'PENDING':
+                to_delete.append(entry)
+        for entry in to_delete:
+            self.neighbor_cache.delete_entry_by_entry(entry)
+        self.logger.info(str(self.neighbor_cache))

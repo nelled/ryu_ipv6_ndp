@@ -12,7 +12,7 @@ router_dns = ['2001:db8:1::1']
 rule_idle_timeout = 15
 
 # Hard timeout for cache entries, will be deleted if STALE for more then timeout
-cache_entry_timeout = 7200
+cache_entry_timeout = 30#7200
 
 # Time for which an address will be tentative in the cache
 tenative_time = 1
