@@ -366,6 +366,10 @@ class NdpProxy(app_manager.RyuApp):
             self._send_packet(na, dpid=dpid)
             return
 
+
+        # TODO: Learn from all Neighbor solicitations, with state created
+        # TODO: patch them through, NAs then received set status to active
+        # TODO: updates via unsolicited NAs still have to be considered
         # If NS is DUD...
         if ipv6_src == '::':
             # TODO: If we have a collision with an entry marked as inactive, need to perform check as well?
