@@ -24,11 +24,11 @@ class NeighborCache:
                 self.entries.get_entries_list()]
         return tabulate(data, headers=headers, tablefmt='fancy_grid')
 
-    def add_entry(self, ip, mac):
+    def add_entry(self, ip, mac, status='CREATED'):
         entry = self.get_entry(mac)
         if not entry:
             cookie = self._gen_cookie(mac)
-            self.entries.iterload([mac, ip, cookie], [CacheEntry(ip, mac, cookie)])
+            self.entries.iterload([mac, ip, cookie], [CacheEntry(ip, mac, cookie, status)])
         else:
             # TODO: On an existing entry, addition of an address will set state for the whole entry.
             # Todo: Probably need to save additional info for each IP (state, timers). Is this possible now

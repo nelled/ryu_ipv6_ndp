@@ -31,7 +31,7 @@ from config import router_mac, rule_idle_timeout, max_msg_buf_len, ndp_proxy_ins
 from nc.neighbor_cache import NeighborCache
 from ndp_proxy_controller import NdpProxyController
 from ndp_proxy_pcap_writer import NdpProxyPcapWriter
-from packet_creator import create_na, create_ns, create_ra
+from packet_creator import create_na, create_ra
 
 ICMPv6_CODES = {133: 'Router Solicitation',
                 134: 'Router Advertisement',
@@ -366,7 +366,6 @@ class NdpProxy(app_manager.RyuApp):
             self._send_packet(na, dpid=dpid)
             return
 
-
         # TODO: Learn from all Neighbor solicitations, with state created
         # TODO: patch them through, NAs then received set status to active
         # TODO: updates via unsolicited NAs still have to be considered
@@ -379,21 +378,23 @@ class NdpProxy(app_manager.RyuApp):
             # UNSOLICITED NA will be ignored if there is no entry for the host. If there is an entry
             #   we will first CHECK if there is more than one response to NS (kind of like DUD)
             cache_entry = self._addr_in_cache(icmpv6_tgt)
+            # TODO: Refactor this
+            cache_id_cookie = 0
             if cache_entry:
                 self.logger.info("Cache hit, setting status to pending and patching through.")
                 cache_entry.set_pending()
-                self._learn_mac_send(dpid, src, dst, in_port, msg, cache_entry.get_cookie(), patch_through=True)
-                self.logger.info(str(self.neighbor_cache))
-
+                cache_id_cookie = cache_entry.get_cookie()
             else:
-                # This is probably not needed, because we learn with DUD, no DUD = Address does not exist
-                # We could, however, still create an entry as with DUD and check. If no response, remove.
-                # This could be achieved by another status, entries with which get purged faster than others
-                self.logger.info("Cache miss, sending NS.")
-                self.statistics['cache_miss_count'] += 1
-                ns = create_ns(ipv6_dst, dst, src_ip=ipv6_src, src_mac=src, tgt_ip=icmpv6_tgt)
-                self.logger.debug("NS looks like this:\n " + ns.show(dump=True))
-                self._send_packet(ns, dpid=dpid)
+                self.logger.info("Cache miss, no DUD has been performed on address %s.", icmpv6_tgt)
+                # TODO: THIS DOES NOT WORK!!! DST MAC IS MULTICAST!
+                # Will need to account for that! Maybe set MAC field do unknown or smth
+                #self.logger.info("Cache miss, creating entry and patching through.")
+                #self.statistics['cache_miss_count'] += 1
+                # Add to NC
+                #cache_id_cookie = self.neighbor_cache.add_entry(icmpv6_tgt, dst, 'PENDING')
+
+            self._learn_mac_send(dpid, src, dst, in_port, msg, cache_id_cookie, patch_through=True)
+            self.logger.info(str(self.neighbor_cache))
 
     def _na_handler(self, dpid, src, dst, in_port, cookie, msg):
         self.logger.info(ICMPv6_CODES[cookie] + ": %s %s %s %s cookie=%d", dpid, src, dst, in_port, cookie)
@@ -410,12 +411,8 @@ class NdpProxy(app_manager.RyuApp):
                 self._learn_mac_send(dpid, src, dst, in_port, msg, cache_entry.get_cookie())
                 self.logger.info(str(self.neighbor_cache))
             else:
-                # TODO: Start procedure to determine if update or spoof
-                # TODO: Somehow save state
-                # TODO: Send NS to BOTH
-                # TODO: If receive two responses - discard new
-                # TODO: If receive one responde from new = Update
-                # TODO: If receive one response from old
+                # TODO: Set existing to pending and send out NS
+                # TODO: Either will be set to active or will be removed after a while
                 self.logger.info("Entry info does not correspond to cache, discarding")
         else:
             self.logger.info("No entry in cache, discarding...")

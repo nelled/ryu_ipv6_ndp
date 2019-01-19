@@ -10,11 +10,11 @@ class CacheEntry:
     If new traffic for an entry is received, the status is sent so ACTIVE again.
     """
 
-    def __init__(self, ip, mac, cookie):
+    def __init__(self, ip, mac, cookie, status='CREATED'):
         self.ips = [ip]
         self.mac = mac
         self.cookie = cookie
-        self.status = 'CREATED'
+        self.status = status
         self.last_updated = time()
         self.created_at = time()
 
