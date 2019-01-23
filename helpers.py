@@ -23,6 +23,23 @@ def mac2ipv6(mac):
     return ipv6
 
 
+def make_snmc_mac(addr):
+    snmc_mac_prefix_str = '33:33'
+    suffix_str = get_snmc_mac_suffix(addr)
+    full = snmc_mac_prefix_str + suffix_str
+    full = full.replace(':', '')
+    return str_to_mac(full)
+
+
+def str_to_mac(s):
+    mac_str = ":".join(s[i:i + 2] for i in range(0, len(s), 2))
+    return mac_str
+
+
+def mac_to_int(mac):
+    return int('0x' + mac.replace(':', ''), 16)
+
+
 # Create solicited node multicast
 def make_sn_mc(addr):
     snmc_prefix = 'FF02:0:0:0:0:1:FF'
@@ -35,3 +52,8 @@ def make_sn_mc(addr):
 def get_snmc_suffix(addr):
     ip = IPv6Address(addr).exploded
     return ip[-7:]
+
+
+def get_snmc_mac_suffix(addr):
+    ip = IPv6Address(addr).exploded
+    return ip[-9:]

@@ -2,6 +2,7 @@ import copy
 
 from tabulate import tabulate
 
+from helpers import mac_to_int
 from nc.cache_entry import CacheEntry
 from nc.multi_dict import MultiDict
 
@@ -24,13 +25,12 @@ class NeighborCache:
                 self.entries.get_entries_list()]
         return tabulate(data, headers=headers, tablefmt='fancy_grid')
 
-    def add_entry(self, ip, mac):
+    def add_entry(self, ip, mac, status='CREATED'):
         entry = self.get_entry(mac)
         if not entry:
             cookie = self._gen_cookie(mac)
-            self.entries.iterload([mac, ip, cookie], [CacheEntry(ip, mac, cookie)])
+            self.entries.iterload([mac, ip, cookie], [CacheEntry(ip, mac, cookie, status)])
         else:
-            entry.set_active()
             entry.reset_updated()
             if not entry.has_ip(ip):
                 entry.add_ip(ip)
@@ -70,15 +70,11 @@ class NeighborCache:
 
     def _gen_cookie(self, mac):
         # Cookie is Counter ORed with MAC
-        int_mac = self._mac_to_int(mac)
+        int_mac = mac_to_int(mac)
         print(int_mac)
         cookie = (self.cookie_counter << 48) | int_mac
         self.cookie_counter = (self.cookie_counter + 1 & 0xFFFF)
         return cookie
-
-    @staticmethod
-    def _mac_to_int(mac):
-        return int('0x' + mac.replace(':', ''), 16)
 
     @staticmethod
     def _to_dict(l):

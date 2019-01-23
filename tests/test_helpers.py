@@ -1,10 +1,19 @@
 import unittest
 from ipaddress import IPv6Address
 
-from helpers import mac2ipv6, make_sn_mc
+from helpers import mac2ipv6, make_sn_mc, make_snmc_mac
 
 
 class TestHelpers(unittest.TestCase):
+
+    def test_make_snmc_mac(self):
+        mac_ips = {'33:33:00:00:00:01': 'ff02::1',
+                   '33:33:ff:e8:65:8f': 'ff02::1:ffe8:658f',
+                   '33:33:fe:ff:ff:ff': 'fe80::fdff:ffff:feff:ffff'}
+        for k, v in mac_ips.items():
+            converted = make_snmc_mac(v)
+            expected = k
+            self.assertEqual(converted, expected)
 
     def test_mac2ipv6(self):
         mac_ips = {'00:00:00:00:00:00': 'fe80::200:00ff:fe00:0000',

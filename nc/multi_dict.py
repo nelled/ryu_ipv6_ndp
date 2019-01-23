@@ -11,6 +11,8 @@ class MultiDict(object):
     def __getitem__(self, item):  # <---SQL SELECT statement
         values = self.keys[item]
         if len(values) > 1:
+            # TODO: Spoofing can cause multiple entries associated for one IP, which results in an exception here.
+            # Without the exception, behaviour also would be undefined.
             return sorted(list(values))
         elif len(values) == 1:
             return list(values)[0]
