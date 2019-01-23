@@ -33,4 +33,4 @@ rest_base_url = '/ndp-proxy'
 ndp_proxy_instance_name = 'ndp_proxy'
 
 # Rate for meter at which packets will get dropped
-max_rate = 5
+max_rate = 30

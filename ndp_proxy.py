@@ -113,7 +113,7 @@ class NdpProxy(app_manager.RyuApp):
                 d[k] = self._to_dict(v)
         return d
 
-    @set_ev_cls(ofp_event.EventOFPStateChangfe,
+    @set_ev_cls(ofp_event.EventOFPStateChange,
                 [MAIN_DISPATCHER, DEAD_DISPATCHER])
     def _state_change_handler(self, ev):
         datapath = ev.datapath
