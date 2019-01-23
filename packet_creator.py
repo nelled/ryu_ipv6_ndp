@@ -5,15 +5,25 @@ from scapy import all as scapy
 from config import router_mac, router_dns
 
 
-def create_na(src_ip, dst_ip, src_mac, dst_mac, r=0, s=1):
+def create_router_na(src_ip, dst_ip, src_mac, dst_mac, r=1, s=0):
     # Advertisement
     ether_head = scapy.Ether(dst=dst_mac, src=src_mac)
     ipv6_head = scapy.IPv6(src=src_ip, dst=dst_ip)
     icmpv6_ns = scapy.ICMPv6ND_NA(tgt=src_ip, R=r, S=s)
     icmpv6_opt_pref = scapy.ICMPv6NDOptPrefixInfo()
-    # Is this the address the answer will be sent to?
     llSrcAdd = scapy.ICMPv6NDOptSrcLLAddr(lladdr=src_mac)
     adv = (ether_head / ipv6_head / icmpv6_ns / icmpv6_opt_pref / llSrcAdd)
+
+    return adv
+
+
+def create_na(src_ip, dst_ip, src_mac, dst_mac, r=0, s=0):
+    # Advertisement
+    ether_head = scapy.Ether(dst=dst_mac, src=src_mac)
+    ipv6_head = scapy.IPv6(src=src_ip, dst=dst_ip)
+    icmpv6_ns = scapy.ICMPv6ND_NA(tgt=src_ip, R=r, S=s)
+    llDstAdd = scapy.ICMPv6NDOptDstLLAddr(lladdr=src_mac)
+    adv = (ether_head / ipv6_head / icmpv6_ns / llDstAdd)
 
     return adv
 

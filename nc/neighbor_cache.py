@@ -2,6 +2,7 @@ import copy
 
 from tabulate import tabulate
 
+from helpers import mac_to_int
 from nc.cache_entry import CacheEntry
 from nc.multi_dict import MultiDict
 
@@ -30,9 +31,6 @@ class NeighborCache:
             cookie = self._gen_cookie(mac)
             self.entries.iterload([mac, ip, cookie], [CacheEntry(ip, mac, cookie, status)])
         else:
-            # TODO: On an existing entry, addition of an address will set state for the whole entry.
-            # Todo: Probably need to save additional info for each IP (state, timers). Is this possible now
-            # or better database? Could save IPs in dictionary instead of list...
             entry.reset_updated()
             if not entry.has_ip(ip):
                 entry.add_ip(ip)
@@ -72,15 +70,11 @@ class NeighborCache:
 
     def _gen_cookie(self, mac):
         # Cookie is Counter ORed with MAC
-        int_mac = self._mac_to_int(mac)
+        int_mac = mac_to_int(mac)
         print(int_mac)
         cookie = (self.cookie_counter << 48) | int_mac
         self.cookie_counter = (self.cookie_counter + 1 & 0xFFFF)
         return cookie
-
-    @staticmethod
-    def _mac_to_int(mac):
-        return int('0x' + mac.replace(':', ''), 16)
 
     @staticmethod
     def _to_dict(l):

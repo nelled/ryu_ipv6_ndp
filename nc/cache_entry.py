@@ -58,5 +58,12 @@ class CacheEntry:
         else:
             return False
 
+    def get_ll(self):
+        # Maybe not safe enough...
+        for ip in self.ips:
+            if ip.startswith('fe80'):
+                return ip
+        return None
+
     def add_ip(self, ip):
         self.ips.append(ip)

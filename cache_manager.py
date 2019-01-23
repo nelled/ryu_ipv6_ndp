@@ -30,6 +30,7 @@ class CacheManager(NdpProxy):
 
     # Wrapper for cyclic checking for dead entries
     def _cache_check(self):
+        # TODO: Check timings
         while True:
             hub.sleep(5)
             self._check_entries()
@@ -40,7 +41,6 @@ class CacheManager(NdpProxy):
         self.logger.debug("Checking old entries...")
         for entry in self.neighbor_cache.entries.values.keys():
             if entry.get_age() >= self.cache_entry_timeout / 2 and entry.status == 'STALE':
-                # TODO: Maybe implement on IP basis? Then need to check all IPs
                 self.logger.debug("Probing entry: %s %s", entry.get_ips()[0], entry.get_mac())
                 entry.set_inactive()
                 ns = create_ns(entry.get_ips()[0], entry.get_mac())

@@ -14,7 +14,6 @@
 # limitations under the License.
 ################################
 ################################
-# TODO: Look into meter tables in order to prevent flooding https://github.com/vanhauser-thc/thc-ipv6
 
 from collections import defaultdict, deque, Iterable
 from time import time, ctime
@@ -31,7 +30,9 @@ from config import router_mac, rule_idle_timeout, max_msg_buf_len, ndp_proxy_ins
 from nc.neighbor_cache import NeighborCache
 from ndp_proxy_controller import NdpProxyController
 from ndp_proxy_pcap_writer import NdpProxyPcapWriter
-from packet_creator import create_na, create_ra
+from packet_creator import create_na, create_ra, create_router_na
+
+from helpers import make_sn_mc, make_snmc_mac
 
 ICMPv6_CODES = {133: 'Router Solicitation',
                 134: 'Router Advertisement',
@@ -40,6 +41,7 @@ ICMPv6_CODES = {133: 'Router Solicitation',
                 137: 'Redirect'
                 }
 ALL_NODES_MC = '33:33:00:00:00:01'
+ALL_NODES_MC_IP = 'ff02::1'
 
 
 class NdpProxy(app_manager.RyuApp):
@@ -89,7 +91,6 @@ class NdpProxy(app_manager.RyuApp):
     def _extract_addr(msg):
         pkt = packet.Packet(msg.data)
         ipv6_header = pkt.get_protocol(ipv6.ipv6)
-        # TODO: make this safer, is there a possibility that data is of wrong format or pkt does not have the element?
         icmpv6_header = pkt[2].data
         ipv6_dst = ipv6_header.dst
         ipv6_src = ipv6_header.src
@@ -112,7 +113,7 @@ class NdpProxy(app_manager.RyuApp):
                 d[k] = self._to_dict(v)
         return d
 
-    @set_ev_cls(ofp_event.EventOFPStateChange,
+    @set_ev_cls(ofp_event.EventOFPStateChangfe,
                 [MAIN_DISPATCHER, DEAD_DISPATCHER])
     def _state_change_handler(self, ev):
         datapath = ev.datapath
@@ -336,11 +337,10 @@ class NdpProxy(app_manager.RyuApp):
         self.logger.info('Tentative addr is: %s', icmpv6_tgt)
         ip_entry = self.neighbor_cache.get_entry(icmpv6_tgt)
         if ip_entry:
-            self.logger.info("Collision, sending NA to notify configuring host...")
-            # TODO: Which address should be advertised??? tentative?
-            # Need to send NA to notify of collision, how should this packet look like
+            self.logger.info("Duplicate address detected! Sending NA to notify configuring host...")
             # TODO: In case of collision with STALE entry, a last check would be good
-            na = create_na(ipv6_src, ipv6_dst, src, dst)
+            ll_ip = ip_entry.get_ll()
+            na = create_na(ll_ip, ALL_NODES_MC_IP, ip_entry.get_mac(), ALL_NODES_MC)
             self.logger.debug("NA looks like this:\n " + na.show(dump=True))
             self._send_packet(na, dpid=dpid)
         else:
@@ -361,24 +361,19 @@ class NdpProxy(app_manager.RyuApp):
         if is_for_router:
             self.logger.info("Received NS for router, responding with our own NA.")
             # Reverse src and dst in signature here
-            na = create_na(ipv6_dst, ipv6_src, dst, src, r=1)
+            na = create_router_na(ipv6_dst, ipv6_src, dst, src)
             self.logger.debug("NA looks like this:\n " + na.show(dump=True))
             self._send_packet(na, dpid=dpid)
             return
 
-        # TODO: Learn from all Neighbor solicitations, with state created
-        # TODO: patch them through, NAs then received set status to active
-        # TODO: updates via unsolicited NAs still have to be considered
         # If NS is DUD...
         if ipv6_src == '::':
             # TODO: If we have a collision with an entry marked as inactive, need to perform check as well?
             # Could also be via status
             self._dud_handler(dpid, src, dst, in_port, cookie, msg)
         else:
-            # UNSOLICITED NA will be ignored if there is no entry for the host. If there is an entry
-            #   we will first CHECK if there is more than one response to NS (kind of like DUD)
+            # UNSOLICITED NA will be ignored if there is no entry for the host.
             cache_entry = self._addr_in_cache(icmpv6_tgt)
-            # TODO: Refactor this
             cache_id_cookie = 0
             if cache_entry:
                 self.logger.info("Cache hit, setting status to pending and patching through.")
@@ -386,12 +381,6 @@ class NdpProxy(app_manager.RyuApp):
                 cache_id_cookie = cache_entry.get_cookie()
             else:
                 self.logger.info("Cache miss, no DUD has been performed on address %s.", icmpv6_tgt)
-                # TODO: THIS DOES NOT WORK!!! DST MAC IS MULTICAST!
-                # Will need to account for that! Maybe set MAC field do unknown or smth
-                #self.logger.info("Cache miss, creating entry and patching through.")
-                #self.statistics['cache_miss_count'] += 1
-                # Add to NC
-                #cache_id_cookie = self.neighbor_cache.add_entry(icmpv6_tgt, dst, 'PENDING')
 
             self._learn_mac_send(dpid, src, dst, in_port, msg, cache_id_cookie, patch_through=True)
             self.logger.info(str(self.neighbor_cache))
@@ -411,8 +400,6 @@ class NdpProxy(app_manager.RyuApp):
                 self._learn_mac_send(dpid, src, dst, in_port, msg, cache_entry.get_cookie())
                 self.logger.info(str(self.neighbor_cache))
             else:
-                # TODO: Set existing to pending and send out NS
-                # TODO: Either will be set to active or will be removed after a while
                 self.logger.info("Entry info does not correspond to cache, discarding")
         else:
             self.logger.info("No entry in cache, discarding...")
