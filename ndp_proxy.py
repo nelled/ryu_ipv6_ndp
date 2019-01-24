@@ -12,8 +12,7 @@
 # implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-################################
-################################
+
 
 from collections import defaultdict, deque, Iterable
 from time import time, ctime
@@ -30,9 +29,7 @@ from config import router_mac, rule_idle_timeout, max_msg_buf_len, ndp_proxy_ins
 from nc.neighbor_cache import NeighborCache
 from ndp_proxy_controller import NdpProxyController
 from ndp_proxy_pcap_writer import NdpProxyPcapWriter
-from packet_creator import create_na, create_ra, create_router_na
-
-from helpers import make_sn_mc, make_snmc_mac
+from packet_creator import create_na, create_ra
 
 ICMPv6_CODES = {133: 'Router Solicitation',
                 134: 'Router Advertisement',
@@ -49,7 +46,10 @@ class NdpProxy(app_manager.RyuApp):
     Ryu App implementing a NDP proxy. Acts as sink and source of all NDP messages and maintains its own
     neighbor cache. Flows with a short timeout are installed for known neighbors and flow deleted messages
     are used to notify the proxy that a host has not received traffic in a while. Such neighbors are marked
-    as stale.
+    as stale. Entries related to an ongoing address resolution are marked as pending and deleted if in that state for
+    too long.
+    Learning exclusively occurs through duplicate address detection. This fact renders the app useless should DUD be
+    deactivated.
     """
     OFP_VERSIONS = [ofproto_v1_3.OFP_VERSION]
 
@@ -147,7 +147,7 @@ class NdpProxy(app_manager.RyuApp):
         inst = None
         if meter_flag:
             # Create band
-            bands = [parser.OFPMeterBandDrop(rate=max_rate, burst_size=10)]
+            bands = [parser.OFPMeterBandDrop(rate=max_rate, burst_size=40)]
             # Install meter request
             req = parser.OFPMeterMod(datapath=datapath, command=ofproto.OFPMC_ADD, flags=ofproto.OFPMF_PKTPS,
                                      meter_id=1,
@@ -338,7 +338,7 @@ class NdpProxy(app_manager.RyuApp):
         ip_entry = self.neighbor_cache.get_entry(icmpv6_tgt)
         if ip_entry:
             self.logger.info("Duplicate address detected! Sending NA to notify configuring host...")
-            # TODO: In case of collision with STALE entry, a last check would be good
+            # TODO: In case of collision with STALE entry, a last check would be good.
             ll_ip = ip_entry.get_ll()
             na = create_na(ll_ip, ALL_NODES_MC_IP, ip_entry.get_mac(), ALL_NODES_MC)
             self.logger.debug("NA looks like this:\n " + na.show(dump=True))
@@ -361,19 +361,17 @@ class NdpProxy(app_manager.RyuApp):
         if is_for_router:
             self.logger.info("Received NS for router, responding with our own NA.")
             # Reverse src and dst in signature here
-            na = create_router_na(ipv6_dst, ipv6_src, dst, src)
+            na = create_na(ipv6_dst, ipv6_src, dst, src, r=1)
             self.logger.debug("NA looks like this:\n " + na.show(dump=True))
             self._send_packet(na, dpid=dpid)
             return
 
         # If NS is DUD...
         if ipv6_src == '::':
-            # TODO: If we have a collision with an entry marked as inactive, need to perform check as well?
-            # Could also be via status
             self._dud_handler(dpid, src, dst, in_port, cookie, msg)
         else:
             # UNSOLICITED NA will be ignored if there is no entry for the host.
-            cache_entry = self._addr_in_cache(icmpv6_tgt)
+            cache_entry = self.neighbor_cache.get_entry(icmpv6_tgt)
             cache_id_cookie = 0
             if cache_entry:
                 self.logger.info("Cache hit, setting status to pending and patching through.")
@@ -407,9 +405,6 @@ class NdpProxy(app_manager.RyuApp):
     def _rm_handler(self, dpid, src, dst, in_port, cookie, msg):
         # Redirect messages only concern us when there are several routers
         self.logger.info(ICMPv6_CODES[cookie] + ": %s %s %s %s cookie=%d", dpid, src, dst, in_port, cookie)
-
-    def _addr_in_cache(self, ip):
-        return self.neighbor_cache.get_entry(ip)
 
     def _send_ra(self, dpid=None, dst=None):
         if not dst:

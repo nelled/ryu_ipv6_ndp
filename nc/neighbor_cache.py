@@ -9,7 +9,7 @@ from nc.multi_dict import MultiDict
 
 class NeighborCache:
     """
-    Class representing a neighbor cache.
+    Class representing a neighbor cache. All IPs are combined into one entry.
     """
 
     # MAC_MASK = 0xFFFFFFFFFFFF

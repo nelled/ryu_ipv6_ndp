@@ -21,6 +21,10 @@ from packet_creator import create_ns
 
 
 class CacheManager(NdpProxy):
+    """
+    Class used to manage the neighbor cache.
+    Iterates over the cache regularly and triggers actions depending on entry state.
+    """
 
     def __init__(self, *args, **kwargs):
         super(CacheManager, self).__init__(*args, **kwargs)

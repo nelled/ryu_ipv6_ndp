@@ -1,7 +1,8 @@
 class MultiDict(object):
     """
     A dictionary that allows multiple keys for one value
-    Taken from https://codereview.stackexchange.com/questions/85842/a-dictionary-that-allows-multiple-keys-for-one-value/103966
+    Taken from https://codereview.stackexchange.com/questions/85842/a-dictionary-that-allows-multiple-keys-for-one-value/103966.
+    In future versions it might be smarter to use an in memory database.
     """
 
     def __init__(self):

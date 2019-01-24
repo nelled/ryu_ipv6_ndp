@@ -8,7 +8,8 @@ from config import rest_base_url, ndp_proxy_instance_name
 
 class NdpProxyController(ControllerBase):
     """
-    Rest controller class for the NDP proxy.
+    Rest controller class for the NDP proxy. Exposes some URLs providing information
+    and allowing to toggle PCAP writing
     """
 
     def __init__(self, req, link, data, **config):

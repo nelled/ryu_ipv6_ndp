@@ -58,6 +58,7 @@ class CacheEntry:
         else:
             return False
 
+    # Gets link layer address if present.
     def get_ll(self):
         # Maybe not safe enough...
         for ip in self.ips:
