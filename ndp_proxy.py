@@ -41,6 +41,9 @@ ALL_NODES_MC = '33:33:00:00:00:01'
 ALL_NODES_MC_IP = 'ff02::1'
 
 
+# TODO: Maybe create messages ourselves. What exactly happens, if attacker does DUD and we forward?
+# TODO: Make stats better, port flood available through rest
+# TODO: Geatly decrease output in normal operation
 class NdpProxy(app_manager.RyuApp):
     """
     Ryu App implementing a NDP proxy. Acts as sink and source of all NDP messages and maintains its own
@@ -60,6 +63,7 @@ class NdpProxy(app_manager.RyuApp):
         super(NdpProxy, self).__init__(*args, **kwargs)
         self.datapaths = {}
         self.mac_to_port = {}
+        self.port_requests = defaultdict(lambda: [0, 0])
         self.neighbor_cache = NeighborCache()
         self.logger.info("Neighbor Cache reated.")
         self.statistics = {'cache_miss_count': 0,
@@ -302,6 +306,7 @@ class NdpProxy(app_manager.RyuApp):
             self.logger.info("Flow removed message does not concern cache.")
 
     def _ndp_packet_handler(self, dpid, src, dst, in_port, cookie, msg):
+        self.port_requests[in_port][0] += 1
         if cookie == 133:
             self.statistics[cookie][dpid][in_port].append((src, ctime(time())))
             self._rs_handler(dpid, src, dst, in_port, cookie, msg)

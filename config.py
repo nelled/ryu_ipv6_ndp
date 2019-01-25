@@ -37,3 +37,6 @@ max_rate = 100
 
 # Router advertisement interval
 ra_interval = 30
+
+# Flood warning rate
+flood_warn_rate = 100
