@@ -23,12 +23,7 @@ class SingleSwitchTopo(Topo):
         Topo.__init__(self, **opts)
         switch = self.addSwitch('s1', protocols='OpenFlow13', cls=OVSKernelSwitch)
         # Python's range(N) generates 0..N-1
-        for h in range(n):
-            host = self.addHost('h%s' % (h + 1))
-            delay = random.randint(1, 100)
-            delay = '%sms' % delay
-            self.addLink(host, switch, bw=10, delay=delay)
-            #self.addLink(host, switch, bw=10)
+
 
 
 topos = {'singleswitchtopo': SingleSwitchTopo}
@@ -38,13 +33,24 @@ if __name__ == '__main__':
     # Tell mininet to print(useful information
     setLogLevel('info')
 
-    topo = SingleSwitchTopo(n=5)
+    topo = SingleSwitchTopo(n=25)
 
     net = Mininet(topo=topo, link=TCLink,
                   controller=None,
                   autoStaticArp=True)
     net.addController('c0', controller=RemoteController, ip='127.0.0.1', port=6653)
     net.start()
+    switch = net['s1']
+    for h in range(50):
+
+        host = net.addHost('h%s' % (h + 1))
+
+        link = net.addLink(host, switch)
+        switch.attach(link.intf2)
+        host.configDefault()
+        time.sleep(0.05)
+
+
     print("Dumping host connections")
     dumpNodeConnections(net.hosts)
     CLI(net)
