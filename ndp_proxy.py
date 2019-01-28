@@ -42,6 +42,7 @@ ALL_NODES_MC_IP = 'ff02::1'
 
 
 # TODO: Maybe create messages ourselves. What exactly happens, if attacker does DUD and we forward?
+# TODO: Created status??
 # TODO: Make stats better, port flood available through rest
 # TODO: Geatly decrease output in normal operation
 class NdpProxy(app_manager.RyuApp):
@@ -375,18 +376,19 @@ class NdpProxy(app_manager.RyuApp):
         if ipv6_src == '::':
             self._dud_handler(dpid, src, dst, in_port, cookie, msg)
         else:
-            # UNSOLICITED NA will be ignored if there is no entry for the host.
+            # TODO: Why not perform check here as in NA
             cache_entry = self.neighbor_cache.get_entry(icmpv6_tgt)
             cache_id_cookie = 0
             if cache_entry:
                 self.logger.info("Cache hit, setting status to pending and patching through.")
                 cache_entry.set_pending()
                 cache_id_cookie = cache_entry.get_cookie()
+                # TODO: Why do I always patch through???
+                self._learn_mac_send(dpid, src, dst, in_port, msg, cache_id_cookie, patch_through=True)
+                self.logger.info(str(self.neighbor_cache))
+                
             else:
                 self.logger.info("Cache miss, no DUD has been performed on address %s.", icmpv6_tgt)
-
-            self._learn_mac_send(dpid, src, dst, in_port, msg, cache_id_cookie, patch_through=True)
-            self.logger.info(str(self.neighbor_cache))
 
     def _na_handler(self, dpid, src, dst, in_port, cookie, msg):
         self.logger.info(ICMPv6_CODES[cookie] + ": %s %s %s %s cookie=%d", dpid, src, dst, in_port, cookie)

@@ -6,14 +6,14 @@ from config import flood_warn_rate
 from ra_sender import RaSender
 
 
-class FloodCheck(RaSender):
+class FloodChecker(RaSender):
     """
     Class used for emitting router advertisements in a regular interval.
     It runs a separate thread that sends a IPv6 RA every config.ra_interval seconds.
     """
 
     def __init__(self, *args, **kwargs):
-        super(FloodCheck, self).__init__(*args, **kwargs)
+        super(FloodChecker, self).__init__(*args, **kwargs)
         self.ra_thread = hub.spawn(self._cyclic_check)
         self.logger.info("Flood checker running...")
         self.last_check = time.time()
