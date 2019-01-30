@@ -1,7 +1,7 @@
 #!/usr/bin/python
 import random
 import time
-
+import sys
 from mininet.topo import Topo
 
 from mininet.cli import CLI
@@ -18,7 +18,7 @@ REMOTE_CONTROLLER_IP = "127.0.0.1"
 
 class SingleSwitchTopo(Topo):
     # Single switch connected to n hosts
-    def __init__(self, n=2, **opts):
+    def __init__(self, **opts):
         # Initialize topology and default options
         Topo.__init__(self, **opts)
         switch = self.addSwitch('s1', protocols='OpenFlow13', cls=OVSKernelSwitch)
@@ -33,7 +33,7 @@ if __name__ == '__main__':
     # Tell mininet to print(useful information
     setLogLevel('info')
 
-    topo = SingleSwitchTopo(n=25)
+    topo = SingleSwitchTopo()
 
     net = Mininet(topo=topo, link=TCLink,
                   controller=None,
@@ -41,7 +41,18 @@ if __name__ == '__main__':
     net.addController('c0', controller=RemoteController, ip='127.0.0.1', port=6653)
     net.start()
     switch = net['s1']
-    for h in range(50):
+
+    if len(sys.argv) > 1:
+        n = sys.argv[1]
+    else:
+        n = 2
+
+    try:
+        n = int(n)
+    except ValueError:
+        n = 2
+
+    for h in range(n):
 
         host = net.addHost('h%s' % (h + 1))
 
