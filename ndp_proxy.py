@@ -41,7 +41,6 @@ ALL_NODES_MC = '33:33:00:00:00:01'
 ALL_NODES_MC_IP = 'ff02::1'
 
 
-# TODO: Created status??
 # TODO: FIRST PRIORITY: verify created before deletion!!!!
 # TODO: Make stats better, port flood available through rest
 # TODO: Geatly decrease output in normal operation
@@ -105,6 +104,14 @@ class NdpProxy(app_manager.RyuApp):
 
     def get_stats_dict(self):
         return self._to_dict(self.statistics)
+
+    def get_port_requests_dict(self):
+        res = {}
+        for k, v in self.port_requests.items():
+            res[k] = v[1]
+
+        return res
+
 
     def _to_dict(self, data):
         d = {}
@@ -330,17 +337,17 @@ class NdpProxy(app_manager.RyuApp):
 
     def _rs_handler(self, dpid, src, dst, in_port, cookie, msg):
         # Respond with router advertisement immediately
-        self.logger.info(ICMPv6_CODES[cookie] + ": %s %s %s %s cookie=%d", dpid, src, dst, in_port, cookie)
+        self.logger.debug(ICMPv6_CODES[cookie] + ": %s %s %s %s cookie=%d", dpid, src, dst, in_port, cookie)
         self._send_ra(dpid=dpid, dst=src)
 
     def _ra_handler(self, dpid, src, dst, in_port, cookie, msg):
         # Log and do not forward, only controller emits RAs
-        self.logger.info(ICMPv6_CODES[cookie] + ": %s %s %s %s cookie=%d", dpid, src, dst, in_port, cookie)
+        self.logger.debug(ICMPv6_CODES[cookie] + ": %s %s %s %s cookie=%d", dpid, src, dst, in_port, cookie)
 
     def _dud_handler(self, dpid, src, dst, in_port, cookie, msg):
-        self.logger.info('This is a DUD message')
+        self.logger.debug('This is a DUD message')
         ipv6_dst, ipv6_src, icmpv6_tgt = self._extract_addr(msg)
-        self.logger.info('Tentative addr is: %s', icmpv6_tgt)
+        self.logger.debug('Tentative addr is: %s', icmpv6_tgt)
         ip_entry = self.neighbor_cache.get_entry(icmpv6_tgt)
         if ip_entry:
             self.logger.info("Duplicate address detected! Sending NA to notify configuring host...")
@@ -360,12 +367,12 @@ class NdpProxy(app_manager.RyuApp):
             self.logger.info(str(self.neighbor_cache))
 
     def _ns_handler(self, dpid, src, dst, in_port, cookie, msg):
-        self.logger.info(ICMPv6_CODES[cookie] + ": %s %s %s %s cookie=%d", dpid, src, dst, in_port, cookie)
+        self.logger.debug(ICMPv6_CODES[cookie] + ": %s %s %s %s cookie=%d", dpid, src, dst, in_port, cookie)
         ipv6_dst, ipv6_src, icmpv6_tgt = self._extract_addr(msg)
-        self.logger.info("Handling NS, DST IS: %s", ipv6_dst)
+        self.logger.debug("Handling NS, DST IS: %s", ipv6_dst)
         is_for_router = self._is_for_router(dst)
         if is_for_router:
-            self.logger.info("Received NS for router, responding with our own NA.")
+            self.logger.debug("Received NS for router, responding with our own NA.")
             # Reverse src and dst in signature here
             na = create_na(ipv6_dst, ipv6_src, dst, src, r=1)
             self.logger.debug("NA looks like this:\n " + na.show(dump=True))
@@ -380,7 +387,7 @@ class NdpProxy(app_manager.RyuApp):
             cache_entry = self.neighbor_cache.get_entry(icmpv6_tgt)
             cache_id_cookie = 0
             if cache_entry:
-                self.logger.info("Cache hit, setting status to pending and patching through.")
+                self.logger.debug("Cache hit, setting status to pending and patching through.")
                 cache_entry.set_pending()
                 cache_id_cookie = cache_entry.get_cookie()
                 # TODO: Why do I always patch through???
@@ -388,36 +395,40 @@ class NdpProxy(app_manager.RyuApp):
                 self.logger.info(str(self.neighbor_cache))
                 
             else:
-                self.logger.info("Cache miss, no DUD has been performed on address %s.", icmpv6_tgt)
+                self.logger.debug("Cache miss, no DUD has been performed on address %s.", icmpv6_tgt)
 
     def _na_handler(self, dpid, src, dst, in_port, cookie, msg):
-        self.logger.info(ICMPv6_CODES[cookie] + ": %s %s %s %s cookie=%d", dpid, src, dst, in_port, cookie)
+        self.logger.debug(ICMPv6_CODES[cookie] + ": %s %s %s %s cookie=%d", dpid, src, dst, in_port, cookie)
 
         ipv6_dst, ipv6_src, icmpv6_tgt = self._extract_addr(msg)
         cache_entry = self.neighbor_cache.get_entry(icmpv6_tgt)
         if cache_entry:
-            self.logger.info("Entry exists...")
+            self.logger.debug("Entry exists...")
             # If entry corresponds to info in packet, we forward the NA and create a flow rule
             # Communication is now possible
             if icmpv6_tgt in cache_entry.get_ips() and src == cache_entry.get_mac():
-                self.logger.info("Entry info corresponds to cache, setting active and allowing communication...")
-                cache_entry.set_active()
-                self._learn_mac_send(dpid, src, dst, in_port, msg, cache_entry.get_cookie())
+                self.logger.debug("NA is for router, updating entry...")
+                if self._is_for_router(dst):
+                    cache_entry.set_stale()
+                else:
+                    self.logger.debug("Entry info corresponds to cache, setting active and allowing communication...")
+                    cache_entry.set_active()
+                    self._learn_mac_send(dpid, src, dst, in_port, msg, cache_entry.get_cookie())
                 self.logger.info(str(self.neighbor_cache))
             else:
-                self.logger.info("Entry info does not correspond to cache, discarding")
+                self.logger.debug("Entry info does not correspond to cache, discarding")
         else:
-            self.logger.info("No entry in cache, discarding...")
+            self.logger.debug("No entry in cache, discarding...")
 
     def _rm_handler(self, dpid, src, dst, in_port, cookie, msg):
         # Redirect messages only concern us when there are several routers
-        self.logger.info(ICMPv6_CODES[cookie] + ": %s %s %s %s cookie=%d", dpid, src, dst, in_port, cookie)
+        self.logger.debug(ICMPv6_CODES[cookie] + ": %s %s %s %s cookie=%d", dpid, src, dst, in_port, cookie)
 
     def _send_ra(self, dpid=None, dst=None):
         if not dst:
             # Send to all
             dst = ALL_NODES_MC
-        self.logger.info('Sending RA to: %s', dst)
+        self.logger.debug('Sending RA to: %s', dst)
         ra = create_ra(dst=dst)
         self.logger.debug("RA looks like this:\n " + ra.show(dump=True))
         self._send_packet(ra, dpid)

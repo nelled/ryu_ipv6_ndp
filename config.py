@@ -14,11 +14,8 @@ router_dns = ['2001:db8:1::1']
 # Entries are set to STALE on reception of flow removed message
 rule_idle_timeout = 15
 
-# Hard timeout for cache entries, will be deleted if STALE for more then timeout
-cache_entry_timeout = 30  # 7200
-
-# Time for which an address will be tentative in the cache
-tenative_time = 1
+# Hard timeout for cache entries, will be deleted if STALE or CREATED for more then timeout
+cache_entry_timeout = 7200
 
 # Max length of statistics deque to prevent flooding
 max_msg_buf_len = 1000

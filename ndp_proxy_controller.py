@@ -35,6 +35,13 @@ class NdpProxyController(ControllerBase):
         table = json.dumps(d)
         return Response(content_type='application/json', text=table)
 
+    @route('ndp_proxy', rest_base_url + '/flood-info', methods=['GET'])
+    def list_stats(self, req, **kwargs):
+        ndp_proxy = self.ndp_proxy_app
+        d = ndp_proxy.get_port_requests_dict()
+        table = json.dumps(d)
+        return Response(content_type='application/json', text=table)
+
     @route('ndp_proxy', rest_base_url + '/write-pcap', methods=['PUT'])
     def set_write_pcap(self, req, **kwargs):
         ndp_proxy = self.ndp_proxy_app
