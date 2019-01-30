@@ -54,7 +54,8 @@ if __name__ == '__main__':
 
     for h in range(n):
 
-        host = net.addHost('h%s' % (h + 1))
+        host = net.addHost('h%s' % (h + 1),
+                           mac='00:00:00:00:00:%02x' % (h+1))
 
         link = net.addLink(host, switch)
         switch.attach(link.intf2)
