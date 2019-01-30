@@ -41,8 +41,8 @@ ALL_NODES_MC = '33:33:00:00:00:01'
 ALL_NODES_MC_IP = 'ff02::1'
 
 
-# TODO: Maybe create messages ourselves. What exactly happens, if attacker does DUD and we forward?
 # TODO: Created status??
+# TODO: FIRST PRIORITY: verify created before deletion!!!!
 # TODO: Make stats better, port flood available through rest
 # TODO: Geatly decrease output in normal operation
 class NdpProxy(app_manager.RyuApp):
