@@ -20,12 +20,12 @@ class NeighborCache:
         self.cookie_counter = 0
 
     def __str__(self):
-        headers = ['MAC', 'IP', 'Total Age', 'Last Updated', 'Cookie', 'Status']
-        data = [[v.mac, '\n'.join(v.ips), v.get_total_age(), v.get_age(), v.get_cookie(), v.status] for v in
+        headers = ['MAC', 'IP', 'Total Age', 'Last Updated', 'Cookie', 'Status', 'Polls']
+        data = [[v.mac, '\n'.join(v.ips), v.get_total_age(), v.get_age(), v.get_cookie(), v.status, v.poll_counter] for v in
                 self.entries.get_entries_list()]
         return tabulate(data, headers=headers, tablefmt='fancy_grid')
 
-    def add_entry(self, ip, mac, status='CREATED'):
+    def add_entry(self, ip, mac, status='STALE'):
         entry = self.get_entry(mac)
         if not entry:
             cookie = self._gen_cookie(mac)

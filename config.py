@@ -14,8 +14,8 @@ router_dns = ['2001:db8:1::1']
 # Entries are set to STALE on reception of flow removed message
 rule_idle_timeout = 15
 
-# Hard timeout for cache entries, will be deleted if STALE or CREATED for more then timeout
-cache_entry_timeout = 7200
+# Hard timeout for cache entries, will be polled for max_poll_count times each cache_check_interval seconds afterwards
+cache_entry_timeout = 20#7200
 
 # Max length of statistics deque to prevent flooding
 max_msg_buf_len = 1000
@@ -37,3 +37,9 @@ ra_interval = 30
 
 # Flood warning rate
 flood_warn_rate = 100
+
+# Polling attempts before host is considered offline
+max_poll_count = 3
+
+# Interval at which cache_manager iterates over cache
+cache_check_interval = 2

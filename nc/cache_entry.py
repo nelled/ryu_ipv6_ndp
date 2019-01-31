@@ -5,18 +5,20 @@ from time import time
 # simply do preprocessing ensuring exploded format?
 class CacheEntry:
     """
-    Class representing an entry in our neighbor cache. Status is set to ACTIVE on creation.
+    Class representing an entry in our neighbor cache. Status is set to STALE on creation.
     If a flow deleted message concerning this entry is received, the status is set to STALE.
-    If new traffic for an entry is received, the status is sent so ACTIVE again.
+    If new traffic for an entry is received, the status is sent so ACTIVE. Should the entry be stale for
+    more than cache_entry_timeout it is set to PENDING and max_poll_count NS messages are sent to poll the host.
     """
 
-    def __init__(self, ip, mac, cookie, status='CREATED'):
+    def __init__(self, ip, mac, cookie, status='STALE'):
         self.ips = [ip]
         self.mac = mac
         self.cookie = cookie
         self.status = status
         self.last_updated = time()
         self.created_at = time()
+        self.poll_counter = 0
 
     def get_total_age(self):
         return time() - self.created_at
@@ -30,14 +32,12 @@ class CacheEntry:
     def set_stale(self):
         self.status = 'STALE'
         self.reset_updated()
+        self.poll_counter = 0
 
     def set_active(self):
         self.status = 'ACTIVE'
         self.reset_updated()
-
-    def set_inactive(self):
-        self.status = 'INACTIVE'
-        self.reset_updated()
+        self.poll_counter = 0
 
     def set_pending(self):
         self.status = 'PENDING'
