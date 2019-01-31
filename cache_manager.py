@@ -42,18 +42,18 @@ class CacheManager(NdpProxy):
         to_delete = []
         for entry in self.neighbor_cache.entries.values.keys():
             if entry.status == 'PENDING':
-                if entry.poll_counter >= max_poll_count:
+                if entry.poll_count >= max_poll_count:
                     to_delete.append(entry)
                 else:
                     ns = create_ns(entry.get_ips()[0], entry.get_mac())
                     self._send_packet(ns)
-                    entry.poll_counter += 1
+                    entry.poll_count += 1
             elif entry.status == 'STALE':
                 if entry.get_age() >= self.cache_entry_timeout:
                     entry.set_pending()
                     ns = create_ns(entry.get_ips()[0], entry.get_mac())
                     self._send_packet(ns)
-                    entry.poll_counter += 1
+                    entry.poll_count += 1
 
         for entry in to_delete:
             self.neighbor_cache.delete_entry_by_entry(entry)

@@ -18,7 +18,7 @@ class CacheEntry:
         self.status = status
         self.last_updated = time()
         self.created_at = time()
-        self.poll_counter = 0
+        self.poll_count = 0
 
     def get_total_age(self):
         return time() - self.created_at
@@ -32,12 +32,12 @@ class CacheEntry:
     def set_stale(self):
         self.status = 'STALE'
         self.reset_updated()
-        self.poll_counter = 0
+        self.poll_count = 0
 
     def set_active(self):
         self.status = 'ACTIVE'
         self.reset_updated()
-        self.poll_counter = 0
+        self.poll_count = 0
 
     def set_pending(self):
         self.status = 'PENDING'
