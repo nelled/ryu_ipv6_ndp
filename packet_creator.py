@@ -13,13 +13,9 @@ def create_na(src_ip, dst_ip, src_mac, dst_mac, r=0, s=0):
     ether_head = scapy.Ether(dst=dst_mac, src=src_mac)
     ipv6_head = scapy.IPv6(src=src_ip, dst=dst_ip)
     icmpv6_ns = scapy.ICMPv6ND_NA(tgt=src_ip, R=r, S=s)
-    if not r:
-        ll_dst_add = scapy.ICMPv6NDOptDstLLAddr(lladdr=src_mac)
-        adv = (ether_head / ipv6_head / icmpv6_ns / ll_dst_add)
-    else:
-        icmpv6_opt_pref = scapy.ICMPv6NDOptPrefixInfo()
-        ll_src_add = scapy.ICMPv6NDOptSrcLLAddr(lladdr=src_mac)
-        adv = (ether_head / ipv6_head / icmpv6_ns / icmpv6_opt_pref / ll_src_add)
+    ll_dst_add = scapy.ICMPv6NDOptDstLLAddr(lladdr=src_mac)
+    adv = (ether_head / ipv6_head / icmpv6_ns / ll_dst_add)
+
 
     return adv
 

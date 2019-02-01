@@ -414,7 +414,7 @@ class NdpProxy(app_manager.RyuApp):
             if is_for_router:
                 self.logger.debug("Received NS for router, responding with our own NA.")
                 # Reverse src and dst in signature here
-                na = create_na(ipv6_dst, ipv6_src, dst, src, r=1)
+                na = create_na(ipv6_dst, ipv6_src, dst, src, s=1)
                 # self.logger.debug("NA looks like this:\n " + na.show(dump=True))
                 self._send_packet(na, dpid=dpid)
             else:

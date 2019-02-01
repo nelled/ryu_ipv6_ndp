@@ -5,7 +5,7 @@ ipv6_nd_prefix = '2001:db8:1::'
 meter_flag = False
 
 # Flag to determine whether to insert an entry for the router into the neighbor cache on startup
-insert_router = True
+insert_router = False
 
 # Router IP
 router_ip = ['fe80::7201:2ff:fe03:405']
