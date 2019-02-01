@@ -1,7 +1,9 @@
-import random
+
 import time
 import sys
 from mininet.topo import Topo
+
+import re
 
 from mininet.cli import CLI
 from mininet.net import Mininet
@@ -25,11 +27,12 @@ class SingleSwitchTopo(Topo):
         switch = self.addSwitch('s1', protocols='OpenFlow13', cls=OVSKernelSwitch)
         # Python's range(N) generates 0..N-1
 
-def run_test(size)
+def run_test(size):
 # Tell mininet to print(useful information
     setLogLevel('info')
 
-    subprocess.run(["ryu-manager", "ndp_proxy_runner.py"])
+    subprocess.call(["ryu-manager", "ndp_proxy_runner.py"])
+
 
 
 
@@ -56,3 +59,13 @@ def run_test(size)
 
     time.sleep(5)
 
+    p = re.compile('time=(.*?)\sms')
+
+    h1 = net.get('h1')
+    result = h1.cmd('ping6 -c1 2001:db8:1:0:200:ff:fe00:2')
+    print(result)
+    return p.findall(result)[0]
+
+
+if __name__ == '__main__':
+    print(run_test(3))
