@@ -407,31 +407,28 @@ class NdpProxy(app_manager.RyuApp):
         ipv6_dst, ipv6_src, icmpv6_tgt = self._extract_addr_icmpv6(msg)
         self.logger.debug("Handling NS, DST IS: %s", ipv6_dst)
         is_for_router = self._is_for_router(dst)
-        if is_for_router:
-            self.logger.debug("Received NS for router, responding with our own NA.")
-            # Reverse src and dst in signature here
-            na = create_na(ipv6_dst, ipv6_src, dst, src, r=1)
-            # self.logger.debug("NA looks like this:\n " + na.show(dump=True))
-            self._send_packet(na, dpid=dpid)
-            return
-
         # If NS is DUD...
         if ipv6_src == '::':
             self._dud_handler(dpid, src, dst, in_port, cookie, msg)
         else:
-            # TODO: Why not perform check here as in NA
-            cache_entry = self.neighbor_cache.get_entry(icmpv6_tgt)
-            cache_id_cookie = 0
-            if cache_entry:
-                self.logger.debug("Cache hit, setting status to pending and patching through.")
-                cache_entry.set_pending()
-                cache_id_cookie = cache_entry.get_cookie()
-                # TODO: Why do I always patch through???
-                self._learn_mac_send(dpid, src, dst, in_port, msg, cache_id_cookie, patch_through=True)
-                self.logger.info(str(self.neighbor_cache))
-
+            if is_for_router:
+                self.logger.debug("Received NS for router, responding with our own NA.")
+                # Reverse src and dst in signature here
+                na = create_na(ipv6_dst, ipv6_src, dst, src, r=1)
+                # self.logger.debug("NA looks like this:\n " + na.show(dump=True))
+                self._send_packet(na, dpid=dpid)
             else:
-                self.logger.debug("Cache miss, no DUD has been performed on address %s.", icmpv6_tgt)
+                cache_entry = self.neighbor_cache.get_entry(icmpv6_tgt)
+                cache_id_cookie = 0
+                if cache_entry:
+                    self.logger.debug("Cache hit, setting status to pending and patching through.")
+                    cache_entry.set_pending()
+                    cache_id_cookie = cache_entry.get_cookie()
+                    self._learn_mac_send(dpid, src, dst, in_port, msg, cache_id_cookie, patch_through=True)
+                    self.logger.info(str(self.neighbor_cache))
+
+                else:
+                    self.logger.debug("Cache miss, no DUD has been performed on address %s.", icmpv6_tgt)
 
     def _na_handler(self, dpid, src, dst, in_port, cookie, msg):
         self.logger.debug(ICMPv6_CODES[cookie] + ": %s %s %s %s cookie=%d", dpid, src, dst, in_port, cookie)
