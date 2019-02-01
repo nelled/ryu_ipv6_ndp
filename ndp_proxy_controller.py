@@ -9,7 +9,7 @@ from config import rest_base_url, ndp_proxy_instance_name
 class NdpProxyController(ControllerBase):
     """
     Rest controller class for the NDP proxy. Exposes some URLs providing information
-    and allowing to toggle PCAP writing
+    and allowing to toggle PCAP writing. URLs are specified in the @route decorator.
     """
 
     def __init__(self, req, link, data, **config):
@@ -28,15 +28,8 @@ class NdpProxyController(ControllerBase):
         table = json.dumps(ndp_proxy.neighbor_cache.get_active_dict())
         return Response(content_type='application/json', text=table)
 
-    @route('ndp_proxy', rest_base_url + '/stats', methods=['GET'])
-    def list_stats(self, req, **kwargs):
-        ndp_proxy = self.ndp_proxy_app
-        d = ndp_proxy.get_stats_dict()
-        table = json.dumps(d)
-        return Response(content_type='application/json', text=table)
-
     @route('ndp_proxy', rest_base_url + '/flood-info', methods=['GET'])
-    def list_stats(self, req, **kwargs):
+    def list_flood_info(self, req, **kwargs):
         ndp_proxy = self.ndp_proxy_app
         d = ndp_proxy.get_port_requests_dict()
         table = json.dumps(d)
@@ -56,3 +49,10 @@ class NdpProxyController(ControllerBase):
             raise Response(status=400)
 
         return Response(content_type='application/json', text=json.dumps(req.json))
+
+    @route('ndp_proxy', rest_base_url + '/statistics', methods=['GET'])
+    def list_stats(self, req, **kwargs):
+        ndp_proxy = self.ndp_proxy_app
+        d = ndp_proxy.get_stats_dict()
+        table = json.dumps(d)
+        return Response(content_type='application/json', text=table)

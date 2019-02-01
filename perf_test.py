@@ -1,23 +1,17 @@
-
-import time
-import sys
-from mininet.topo import Topo
-
 import re
-
-from mininet.cli import CLI
-from mininet.net import Mininet
-from mininet.util import dumpNodeConnections
-from mininet.log import setLogLevel
-
-from mininet.node import RemoteController, OVSKernelSwitch
+import subprocess
+import time
+from collections import defaultdict
 
 # Traffic Control
 from mininet.link import TCLink
-
-import subprocess
+from mininet.log import setLogLevel
+from mininet.net import Mininet
+from mininet.node import RemoteController, OVSKernelSwitch
+from mininet.topo import Topo
 
 REMOTE_CONTROLLER_IP = "127.0.0.1"
+
 
 class SingleSwitchTopo(Topo):
     # Single switch connected to n hosts
@@ -25,16 +19,16 @@ class SingleSwitchTopo(Topo):
         # Initialize topology and default options
         Topo.__init__(self, **opts)
         switch = self.addSwitch('s1', protocols='OpenFlow13', cls=OVSKernelSwitch)
-        # Python's range(N) generates 0..N-1
+
 
 def run_test(size):
-# Tell mininet to print(useful information
+    # Tell mininet to print(useful information
     setLogLevel('info')
 
-    subprocess.call(["ryu-manager", "ndp_proxy_runner.py"])
+    proc = subprocess.Popen(["ryu-manager", "ndp_proxy_runner.py"])
 
-
-
+    # Sleep time to give ryu time to start up. Might work with less than 5 seconds
+    time.sleep(5)
 
     topo = SingleSwitchTopo()
 
@@ -45,27 +39,41 @@ def run_test(size):
     net.start()
     switch = net['s1']
 
-
     for h in range(size):
-
         host = net.addHost('h%s' % (h + 1),
-                           mac='00:00:00:00:00:%02x' % (h+1))
+                           mac='00:00:00:00:00:%02x' % (h + 1))
 
         link = net.addLink(host, switch)
         switch.attach(link.intf2)
         host.configDefault()
+        print('added host')
         time.sleep(0.05)
 
-
+    # Time to let DUD take place. Might work with less than 5
     time.sleep(5)
-
+    # Regular expression used to catch the time from output
     p = re.compile('time=(.*?)\sms')
 
     h1 = net.get('h1')
-    result = h1.cmd('ping6 -c1 2001:db8:1:0:200:ff:fe00:2')
+    result = h1.cmd('ping6 -c1 fe80::200:ff:fe00:2 -I h1-eth0')
     print(result)
+    proc.terminate()
+    net.stop()
     return p.findall(result)[0]
 
 
 if __name__ == '__main__':
-    print(run_test(3))
+    # List of topology sizes
+    sizes = [100]
+    # Number of iterations
+    n = 25
+    res = defaultdict(lambda: [])
+    for size in sizes:
+        for i in range(0, 25):
+            print(i)
+            try:
+                res[size].append(run_test(size))
+            except IndexError:
+                res[size].append(0)
+
+    print(res)

@@ -55,6 +55,7 @@ class CacheManager(NdpProxy):
                     self._send_packet(ns)
                     entry.poll_count += 1
 
+        # This is needed to avoid changing length of the iterator while iterating.
         for entry in to_delete:
             self.neighbor_cache.delete_entry_by_entry(entry)
 

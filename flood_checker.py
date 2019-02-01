@@ -8,8 +8,8 @@ from ra_sender import RaSender
 
 class FloodChecker(RaSender):
     """
-    Class used for emitting router advertisements in a regular interval.
-    It runs a separate thread that sends a IPv6 RA every config.ra_interval seconds.
+    Class used for calculating the rate at which packets arrive for each port.
+    Calculation is executed roughly each second.
     """
 
     def __init__(self, *args, **kwargs):

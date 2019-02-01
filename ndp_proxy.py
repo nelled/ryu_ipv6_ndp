@@ -81,6 +81,7 @@ class NdpProxy(app_manager.RyuApp):
 
         self.logger.info("NDP proxy running...")
 
+    # Checks if a message is destined for the router.
     @staticmethod
     def _is_for_router(dst):
         if dst == router_mac:
@@ -88,7 +89,7 @@ class NdpProxy(app_manager.RyuApp):
         else:
             return False
 
-    # Takes msg and returns src, dst, and icmpv6 tgt
+    # Takes ICMPv6 msg and returns src, dst, and icmpv6 tgt
     @staticmethod
     def _extract_addr_icmpv6(msg):
         pkt = packet.Packet(msg.data)
@@ -100,6 +101,7 @@ class NdpProxy(app_manager.RyuApp):
 
         return ipv6_dst, ipv6_src, icmpv6_tgt
 
+    # Takes IPv6 and returns src, dst, and icmpv6 tgt
     @staticmethod
     def _extract_addr(msg):
         pkt = packet.Packet(msg.data)
@@ -131,6 +133,7 @@ class NdpProxy(app_manager.RyuApp):
                 d[k] = self._to_dict(v)
         return d
 
+    # Handler responsible for connecting to.
     @set_ev_cls(ofp_event.EventOFPStateChange,
                 [MAIN_DISPATCHER, DEAD_DISPATCHER])
     def _state_change_handler(self, ev):
@@ -145,6 +148,7 @@ class NdpProxy(app_manager.RyuApp):
                 self.logger.debug('unregister datapath: %016x', datapath.id)
                 del self.datapaths[datapath.id]
 
+    # Handler responsible for setting up the flows in a new switch.
     @set_ev_cls(ofp_event.EventOFPSwitchFeatures, CONFIG_DISPATCHER)
     def switch_features_handler(self, ev):
         datapath = ev.msg.datapath
@@ -163,6 +167,7 @@ class NdpProxy(app_manager.RyuApp):
         self.add_flow(datapath, 0, match, actions, timeout=0)
 
         inst = None
+        # Create a meter to limit throughput
         if meter_flag:
             # Create band
             bands = [parser.OFPMeterBandDrop(rate=max_rate, burst_size=40)]
@@ -170,21 +175,22 @@ class NdpProxy(app_manager.RyuApp):
             req = parser.OFPMeterMod(datapath=datapath, command=ofproto.OFPMC_ADD, flags=ofproto.OFPMF_PKTPS,
                                      meter_id=1,
                                      bands=bands)
-            # Send request
+            # Send request.
             datapath.send_msg(req)
 
-            # Additional instruction to apply meter
+            # Additional instruction to apply meter.
             inst = [parser.OFPInstructionMeter(1)]
 
-        # Install match for all ICMPv6 messages
+        # Install match for all ICMPv6 messages.
         for icmp_code in range(133, 137 + 1):
             match = parser.OFPMatch(eth_type=0x86dd, ip_proto=58, icmpv6_type=icmp_code)
             self.add_flow(datapath, 10, match, actions, instructions=inst, cookie=icmp_code, timeout=0)
 
-        # Install match for IPv6 traffic, so we get notified if there is no active flow
+        # Install match for IPv6 traffic, so we get notified if there is no active flow.
         match = parser.OFPMatch(eth_type=0x86dd)
         self.add_flow(datapath, 8, match, actions, instructions=inst, cookie=0, timeout=0)
 
+    # Adds a flow with the provided parameters
     def add_flow(self, datapath, priority, match, actions, instructions=None, buffer_id=None, cookie=0,
                  timeout=rule_idle_timeout):
         self.logger.debug("Added flow for: " + str(match))
@@ -209,6 +215,7 @@ class NdpProxy(app_manager.RyuApp):
                                     flags=ofproto.OFPFF_SEND_FLOW_REM)
         datapath.send_msg(mod)
 
+    # Handler responsible for incoming packets.
     @set_ev_cls(ofp_event.EventOFPPacketIn, MAIN_DISPATCHER)
     def _packet_in_handler(self, ev):
         # If you hit this you might want to increase
@@ -235,6 +242,7 @@ class NdpProxy(app_manager.RyuApp):
         src = eth.src
 
         dpid = datapath.id
+        # Set up mac to port table.
         self.mac_to_port.setdefault(dpid, {})
 
         if msg.reason == ofproto.OFPR_NO_MATCH:
@@ -246,6 +254,7 @@ class NdpProxy(app_manager.RyuApp):
         if msg.cookie in ICMPv6_CODES.keys():
             self._ndp_packet_handler(dpid, src, dst, in_port, msg.cookie, msg)
         else:
+            # Use first packet on a stale entry to verify activity and then forward.
             if eth.ethertype == ether_types.ETH_TYPE_IPV6:
 
                 ipv6_dst, ipv6_src = self._extract_addr(msg)
@@ -253,8 +262,8 @@ class NdpProxy(app_manager.RyuApp):
                 cache_entry = self.neighbor_cache.get_entry(ipv6_src)
                 if cache_entry:
                     self.logger.debug("Entry exists...")
-                    # If entry corresponds to info in packet, we forward the NA and create a flow rule
-                    # Communication is now possible
+                    # If entry corresponds to info in packet, we forward the NA and create a flow rule.
+                    # Communication is now possible.
                     if src == cache_entry.get_mac():
                         if dst in self.mac_to_port[dpid]:
                             cache_entry.set_active()
@@ -266,11 +275,12 @@ class NdpProxy(app_manager.RyuApp):
                 else:
                     self.logger.debug("No entry in cache, discarding...")
             else:
-                # For other messages we simply install a flow rule
+                # For IPv4 we simply forward traffic via a flow rule. Those do not have a timeout.
                 self.logger.debug("Another Message: %s %s %s %s reason=%s match=%s cookie=%d ether=%d", dpid, src, dst,
                                   in_port, reason, msg.match, msg.cookie, eth.ethertype)
                 self._learn_mac_send(dpid, src, dst, in_port, msg, timeout=0, ether_type=ether_types.ETH_TYPE_IP)
 
+    # Learn MAC in mac to port.
     def _learn_mac(self, dpid, src, in_port):
         self.mac_to_port[dpid][src] = in_port
 
@@ -290,6 +300,7 @@ class NdpProxy(app_manager.RyuApp):
 
         actions = [parser.OFPActionOutput(out_port)]
 
+        # Check if we just want to patch the packet through without a flow.
         if not patch_through:
             # Install a flow to avoid packet_in next time
             if out_port != ofproto.OFPP_FLOOD:
@@ -297,7 +308,7 @@ class NdpProxy(app_manager.RyuApp):
                     match = parser.OFPMatch(in_port=in_port, eth_dst=dst, eth_src=src, eth_type=ether_type)
                 else:
                     match = parser.OFPMatch(in_port=in_port, eth_dst=dst, eth_src=src)
-                # If we do not forward the packet (because we send our own NS back i.e.)
+                # If we do not forward the packet (because we send our own NS back i.e.).
                 if forward_packet == False:
                     self.add_flow(datapath, priority, match, actions, cookie=cookie, timeout=timeout)
                     return
@@ -319,6 +330,7 @@ class NdpProxy(app_manager.RyuApp):
                                   in_port=in_port, actions=actions, data=data)
         datapath.send_msg(out)
 
+    # Handle flow removed messages. We use them to set a cache entry to stale.
     @set_ev_cls(ofp_event.EventOFPFlowRemoved, MAIN_DISPATCHER)
     def _flow_removed_handler(self, ev):
         msg = ev.msg
@@ -347,8 +359,9 @@ class NdpProxy(app_manager.RyuApp):
             self.neighbor_cache.set_stale(msg.cookie)
             self.logger.info(str(self.neighbor_cache))
         except AttributeError:
-            self.logger.info("Flow removed message does not concern cache.")
+            self.logger.debug("Flow removed message does not concern cache.")
 
+    # Record ICMPv6 packet and trigger handler.
     def _ndp_packet_handler(self, dpid, src, dst, in_port, cookie, msg):
         self.port_requests[in_port][0] += 1
         if cookie == 133:
@@ -371,15 +384,18 @@ class NdpProxy(app_manager.RyuApp):
             self.statistics[cookie][dpid][in_port].append((src, ctime(time())))
             self._rm_handler(dpid, src, dst, in_port, cookie, msg)
 
+    # Handler for router solicitation messages
     def _rs_handler(self, dpid, src, dst, in_port, cookie, msg):
-        # Respond with router advertisement immediately
+        # Respond with router advertisement immediately.
         self.logger.debug(ICMPv6_CODES[cookie] + ": %s %s %s %s cookie=%d", dpid, src, dst, in_port, cookie)
         self._send_ra(dpid=dpid, dst=src)
 
+    # Handler for rouer advertisement messages
     def _ra_handler(self, dpid, src, dst, in_port, cookie, msg):
         # Log and do not forward, only controller emits RAs
         self.logger.debug(ICMPv6_CODES[cookie] + ": %s %s %s %s cookie=%d", dpid, src, dst, in_port, cookie)
 
+    # Handler for duplicate address detection messages with source ip = ::
     def _dud_handler(self, dpid, src, dst, in_port, cookie, msg):
         self.logger.debug('This is a DUD message')
         ipv6_dst, ipv6_src, icmpv6_tgt = self._extract_addr_icmpv6(msg)
@@ -394,10 +410,6 @@ class NdpProxy(app_manager.RyuApp):
             self._send_packet(na, dpid=dpid)
         else:
             # We do not need to forward this NS, because DUD does not create an entry in neighbor cache of host
-            '''
-            - The Target Address is a "tentative" address on which Duplicate
-             Address Detection is being performed [ADDRCONF].
-            '''
             # Add to NC
             cache_id_cookie = self.neighbor_cache.add_entry(icmpv6_tgt, src)
             self.logger.info(str(self.neighbor_cache))
@@ -418,6 +430,7 @@ class NdpProxy(app_manager.RyuApp):
                 # self.logger.debug("NA looks like this:\n " + na.show(dump=True))
                 self._send_packet(na, dpid=dpid)
             else:
+                # We invoke normal checking.
                 cache_entry = self.neighbor_cache.get_entry(icmpv6_tgt)
                 cache_id_cookie = 0
                 if cache_entry:
@@ -426,10 +439,10 @@ class NdpProxy(app_manager.RyuApp):
                     cache_id_cookie = cache_entry.get_cookie()
                     self._learn_mac_send(dpid, src, dst, in_port, msg, cache_id_cookie, patch_through=True)
                     self.logger.info(str(self.neighbor_cache))
-
                 else:
                     self.logger.debug("Cache miss, no DUD has been performed on address %s.", icmpv6_tgt)
 
+    # Handler for neighbor advertisement messages.
     def _na_handler(self, dpid, src, dst, in_port, cookie, msg):
         self.logger.debug(ICMPv6_CODES[cookie] + ": %s %s %s %s cookie=%d", dpid, src, dst, in_port, cookie)
 
@@ -454,10 +467,12 @@ class NdpProxy(app_manager.RyuApp):
         else:
             self.logger.debug("No entry in cache, discarding...")
 
+    # Handler for redirect messages. We do not use them.
     def _rm_handler(self, dpid, src, dst, in_port, cookie, msg):
         # Redirect messages only concern us when there are several routers
         self.logger.debug(ICMPv6_CODES[cookie] + ": %s %s %s %s cookie=%d", dpid, src, dst, in_port, cookie)
 
+    # Just send a router advertisement.
     def _send_ra(self, dpid=None, dst=None):
         if not dst:
             # Send to all
@@ -478,7 +493,7 @@ class NdpProxy(app_manager.RyuApp):
 
         for dp in datapaths:
             self._send_on_dp(pkt, dp)
-
+        # Write if wanted.
         self.pcap_writer.write_pcap_generated(pkt)
 
     def _send_on_dp(self, pkt, dpid):

@@ -4,7 +4,7 @@ from ipaddress import IPv6Address
 Some helpers for dealing with addresses.
 """
 
-
+# Create a link local IP from a MAC
 def mac2ipv6(mac):
     # only accept MACs separated by a colon
     parts = mac.split(":")
@@ -22,7 +22,7 @@ def mac2ipv6(mac):
 
     return ipv6
 
-
+# Make solicited node multicast MAC
 def make_snmc_mac(addr):
     snmc_mac_prefix_str = '33:33'
     suffix_str = get_snmc_mac_suffix(addr)
@@ -40,7 +40,7 @@ def mac_to_int(mac):
     return int('0x' + mac.replace(':', ''), 16)
 
 
-# Create solicited node multicast
+# Create solicited node multicast IP
 def make_sn_mc(addr):
     snmc_prefix = 'FF02:0:0:0:0:1:FF'
     suffix = get_snmc_suffix(addr)
