@@ -5,6 +5,7 @@ from tabulate import tabulate
 from helpers import mac_to_int
 from nc.cache_entry import CacheEntry
 from nc.multi_dict import MultiDict
+from config import insert_router, router_mac, router_ip
 
 
 class NeighborCache:
@@ -18,6 +19,7 @@ class NeighborCache:
     def __init__(self):
         self.entries = MultiDict()
         self.cookie_counter = 0
+        self._insert_router()
 
     def __str__(self):
         headers = ['MAC', 'IP', 'Total Age', 'Last Updated', 'Cookie', 'Status', 'Polls']
@@ -68,10 +70,14 @@ class NeighborCache:
     def get_active_dict(self):
         return self._to_dict(self._get_active())
 
+    def _insert_router(self):
+        if insert_router:
+            for ip in router_ip:
+                self.add_entry(ip, router_mac)
+
     def _gen_cookie(self, mac):
         # Cookie is Counter ORed with MAC
         int_mac = mac_to_int(mac)
-        print(int_mac)
         cookie = (self.cookie_counter << 48) | int_mac
         self.cookie_counter = (self.cookie_counter + 1 & 0xFFFF)
         return cookie

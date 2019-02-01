@@ -1,20 +1,20 @@
 #!/usr/bin/python
-import random
-import time
 import sys
-from mininet.topo import Topo
+import time
 
 from mininet.cli import CLI
-from mininet.net import Mininet
-from mininet.util import dumpNodeConnections
-from mininet.log import setLogLevel
-
-from mininet.node import RemoteController, OVSKernelSwitch
-
 # Traffic Control
 from mininet.link import TCLink
+from mininet.log import setLogLevel
+from mininet.net import Mininet
+from mininet.node import RemoteController, OVSKernelSwitch
+from mininet.topo import Topo
+from mininet.util import dumpNodeConnections
+
+from config import router_mac, insert_router
 
 REMOTE_CONTROLLER_IP = "127.0.0.1"
+
 
 class SingleSwitchTopo(Topo):
     # Single switch connected to n hosts
@@ -25,9 +25,7 @@ class SingleSwitchTopo(Topo):
         # Python's range(N) generates 0..N-1
 
 
-
 topos = {'singleswitchtopo': SingleSwitchTopo}
-
 
 if __name__ == '__main__':
     # Tell mininet to print(useful information
@@ -53,15 +51,20 @@ if __name__ == '__main__':
         n = 2
 
     for h in range(n):
-
         host = net.addHost('h%s' % (h + 1),
-                           mac='00:00:00:00:00:%02x' % (h+1))
+                           mac='00:00:00:00:00:%02x' % (h + 1))
 
         link = net.addLink(host, switch)
         switch.attach(link.intf2)
         host.configDefault()
         time.sleep(0.05)
 
+    if insert_router:
+        host = net.addHost('r1', mac=router_mac)
+        link = net.addLink(host, switch)
+        switch.attach(link.intf2)
+        #h1.cmd("ifconfig h1-eth0 inet6 add fc00::1/64")
+        host.configDefault()
 
     print("Dumping host connections")
     dumpNodeConnections(net.hosts)

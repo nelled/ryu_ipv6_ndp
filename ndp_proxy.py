@@ -109,7 +109,6 @@ class NdpProxy(app_manager.RyuApp):
 
         return ipv6_dst, ipv6_src
 
-
     def get_stats_dict(self):
         return self._to_dict(self.statistics)
 
@@ -248,8 +247,9 @@ class NdpProxy(app_manager.RyuApp):
             self._ndp_packet_handler(dpid, src, dst, in_port, msg.cookie, msg)
         else:
             if eth.ethertype == ether_types.ETH_TYPE_IPV6:
-                self.logger.debug("Received normal IPv6 traffic")
+
                 ipv6_dst, ipv6_src = self._extract_addr(msg)
+                self.logger.debug("Received normal IPv6 traffic from %s to %s", ipv6_src, ipv6_dst)
                 cache_entry = self.neighbor_cache.get_entry(ipv6_src)
                 if cache_entry:
                     self.logger.debug("Entry exists...")
@@ -258,7 +258,8 @@ class NdpProxy(app_manager.RyuApp):
                     if src == cache_entry.get_mac():
                         if dst in self.mac_to_port[dpid]:
                             cache_entry.set_active()
-                        self._learn_mac_send(dpid, src, dst, in_port, msg, cookie=cache_entry.get_cookie(), priority=9, ether_type=ether_types.ETH_TYPE_IPV6)
+                        self._learn_mac_send(dpid, src, dst, in_port, msg, cookie=cache_entry.get_cookie(), priority=9,
+                                             ether_type=ether_types.ETH_TYPE_IPV6)
                         self.logger.info(str(self.neighbor_cache))
                     else:
                         self.logger.debug("Message info to cache, discarding")
@@ -267,14 +268,15 @@ class NdpProxy(app_manager.RyuApp):
             else:
                 # For other messages we simply install a flow rule
                 self.logger.debug("Another Message: %s %s %s %s reason=%s match=%s cookie=%d ether=%d", dpid, src, dst,
-                                 in_port, reason, msg.match, msg.cookie, eth.ethertype)
+                                  in_port, reason, msg.match, msg.cookie, eth.ethertype)
                 self._learn_mac_send(dpid, src, dst, in_port, msg, timeout=0, ether_type=ether_types.ETH_TYPE_IP)
 
     def _learn_mac(self, dpid, src, in_port):
         self.mac_to_port[dpid][src] = in_port
 
     # Forward and learn MAC
-    def _learn_mac_send(self, dpid, src, dst, in_port, msg, cookie=0, priority=1, ether_type=None, forward_packet=True, timeout=rule_idle_timeout,
+    def _learn_mac_send(self, dpid, src, dst, in_port, msg, cookie=0, priority=1, ether_type=None, forward_packet=True,
+                        timeout=rule_idle_timeout,
                         patch_through=False):
         datapath = self.datapaths[dpid]
         ofproto = datapath.ofproto
@@ -302,7 +304,8 @@ class NdpProxy(app_manager.RyuApp):
                 # Verify if we have a valid buffer_id, if yes avoid to send both
                 # flow_mod & packet_out
                 if msg.buffer_id != ofproto.OFP_NO_BUFFER:
-                    self.add_flow(datapath, priority, match, actions, buffer_id=msg.buffer_id, cookie=cookie, timeout=timeout)
+                    self.add_flow(datapath, priority, match, actions, buffer_id=msg.buffer_id, cookie=cookie,
+                                  timeout=timeout)
                     return
                 else:
                     self.add_flow(datapath, priority, match, actions, cookie=cookie, timeout=timeout)
@@ -387,7 +390,7 @@ class NdpProxy(app_manager.RyuApp):
             # TODO: In case of collision with STALE entry, a last check would be good.
             ll_ip = ip_entry.get_ll()
             na = create_na(ll_ip, ALL_NODES_MC_IP, ip_entry.get_mac(), ALL_NODES_MC)
-            #self.logger.debug("NA looks like this:\n " + na.show(dump=True))
+            # self.logger.debug("NA looks like this:\n " + na.show(dump=True))
             self._send_packet(na, dpid=dpid)
         else:
             # We do not need to forward this NS, because DUD does not create an entry in neighbor cache of host
@@ -408,7 +411,7 @@ class NdpProxy(app_manager.RyuApp):
             self.logger.debug("Received NS for router, responding with our own NA.")
             # Reverse src and dst in signature here
             na = create_na(ipv6_dst, ipv6_src, dst, src, r=1)
-            #self.logger.debug("NA looks like this:\n " + na.show(dump=True))
+            # self.logger.debug("NA looks like this:\n " + na.show(dump=True))
             self._send_packet(na, dpid=dpid)
             return
 
@@ -464,7 +467,7 @@ class NdpProxy(app_manager.RyuApp):
             dst = ALL_NODES_MC
         self.logger.debug('Sending RA to: %s', dst)
         ra = create_ra(dst=dst)
-        #self.logger.debug("RA looks like this:\n " + ra.show(dump=True))
+        # self.logger.debug("RA looks like this:\n " + ra.show(dump=True))
         self._send_packet(ra, dpid)
 
     def _send_packet(self, pkt, dpid=None):

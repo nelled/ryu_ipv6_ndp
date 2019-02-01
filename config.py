@@ -4,6 +4,12 @@ ipv6_nd_prefix = '2001:db8:1::'
 # Use metering
 meter_flag = False
 
+# Flag to determine whether to insert an entry for the router into the neighbor cache on startup
+insert_router = True
+
+# Router IP
+router_ip = ['fe80::7201:2ff:fe03:405']
+
 # MAC of router to be used in RAs
 router_mac = '70:01:02:03:04:05'
 
