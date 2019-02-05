@@ -15,6 +15,9 @@ sudo python simple_topo.py <node_count>
 as it adds a delay between the addition of each host. If the `insert_router` flag is set in the `config`
 file, a router host is added as well. This can be uncommented safely.
 
+# NB!
+Make sure to first run the proxy app, then start the topology with Mininet.
+
 # Checking the flow table
 To verify which flow rules are present in the switch `sudo ovs-ofctl -O Openflow13 dump-flows s1
 `can be used.
