@@ -41,7 +41,7 @@ In order to toggle packets being written to a `.pcap` file in `./pcap`,
 ```bash
 curl -X PUT -d '{"all": 0, "generated": 0}' http://0.0.0.0:8080/ndp-proxy/write-pcap
 ```
-can be used.
+can be used. Setting the respective flag to 1 starts writing to a file identified by a timestamp.
 
 # Structure of the project
 ```bash
