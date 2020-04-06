@@ -29,7 +29,7 @@ stevedore==1.29.0
 superjson==0.0.10
 tabulate==0.8.2
 tinyrpc==0.9.3
-urllib3==1.23
+urllib3==1.24.2
 vulture==1.0
 WebOb==1.8.3
 wrapt==1.10.11
