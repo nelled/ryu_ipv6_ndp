@@ -22,7 +22,7 @@ requests==2.19.1
 rfc3986==1.1.0
 Routes==2.4.1
 ryu==4.29
-scapy==2.4.0
+scapy==2.4.1
 six==1.11.0
 sortedcontainers==2.0.5
 stevedore==1.29.0
