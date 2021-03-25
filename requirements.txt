@@ -16,7 +16,7 @@ oslo.i18n==3.22.1
 ovs==2.10.0
 pbr==5.0.0
 pytz==2018.5
-PyYAML==3.13
+PyYAML==5.4
 repoze.lru==0.7
 requests==2.19.1
 rfc3986==1.1.0
